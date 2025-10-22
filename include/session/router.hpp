@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <type_traits>
 
@@ -52,6 +53,9 @@ namespace session::router
         /// split any "too large" packets into two.
         uint16_t suggested_mtu;
     };
+
+    using snode_path = std::vector<std::pair<std::string, std::string>>;
+    using session_path = std::pair<snode_path, std::string>;
 
     class SessionRouter
     {
@@ -120,6 +124,21 @@ namespace session::router
         // (failure).  This is provided for quick-and-dirty implementation code; generally code
         // should prefer the callback-based async version, above.
         tunnel_info establish_udp_blocking(std::string_view remote, uint16_t port);
+
+        // If we have a session with the given remote, returns the path we are currently using for
+        // that session.  In the case of a client<->client session, this will be the relay which we
+        // are using as a pivot.
+        //
+        // If there is a session but no current path, an empty vector is
+        // returned.
+        // If there is not a session to the remote, std::nullopt is returned.
+        std::optional<snode_path> get_path_for_session(std::string_view remote);
+
+        // Returns the path we're currently using for each session along with the remote endpoint
+        // of that session.  In the case of snode (relay) sessions, the remote endpoint will be
+        // the same as the path terminus.  In the case of client<->client sessions, the remote
+        // endpoint is the client which we're connected to via that path as a relay.
+        std::vector<session_path> get_all_session_paths();
     };
 
     template SessionRouter::SessionRouter(const std::filesystem::path&, std::shared_ptr<oxen::quic::Loop>);

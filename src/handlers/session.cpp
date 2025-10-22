@@ -1126,4 +1126,13 @@ namespace srouter::handlers
             last_tag++;
         return last_tag;
     }
+
+    void SessionEndpoint::for_each_session(
+        std::function<void(const NetworkAddress&, const session::Session&)> visit) const
+    {
+        for (const auto& [addr, s] : _sessions)
+        {
+            visit(addr, *s);
+        }
+    }
 }  //  namespace srouter::handlers

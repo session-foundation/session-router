@@ -1656,4 +1656,19 @@ namespace srouter::session
         _parent.router.link_endpoint().send_command(
             _current_thop->downstream, "session_control"s, std::move(data), nullptr);
     }
+
+    std::vector<std::pair<std::string, std::string>> OutboundSession::current_path() const
+    {
+        if (_current_path)
+            return _current_path->get_hops_strings_and_ips();
+        return {};
+    }
+
+    std::vector<std::pair<std::string, std::string>> InboundClientSession::current_path() const
+    {
+        if (_current_path)
+            return _current_path->get_hops_strings_and_ips();
+        return {};
+    }
+
 }  // namespace srouter::session

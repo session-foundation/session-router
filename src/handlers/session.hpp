@@ -211,6 +211,8 @@ namespace srouter
 
             void queue_session_packet(const NetworkAddress& remote, IPPacket pkt);
 
+            void for_each_session(std::function<void(const NetworkAddress&, const session::Session&)> visit) const;
+
             session_tag next_tag();
         };
 

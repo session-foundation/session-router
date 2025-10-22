@@ -339,7 +339,8 @@ if(APPLE AND SROUTER_FULL)
 endif()
 
 add_executable(libsession-router_jank_test EXCLUDE_FROM_ALL contrib/libsession-router_jank_test.cpp)
-target_link_libraries(libsession-router_jank_test PRIVATE libsession-router)
+target_include_directories(libsession-router_jank_test PUBLIC include/)
+target_link_libraries(libsession-router_jank_test PRIVATE libsessionrouter)
 
 # uninstall target
 if(NOT TARGET uninstall)

@@ -143,4 +143,38 @@ namespace session::router
         return fut.get();
     }
 
+    std::optional<snode_path> SessionRouter::get_path_for_session(std::string_view remote)
+    {
+        srouter::NetworkAddress netaddr;
+        try
+        {
+            netaddr = srouter::NetworkAddress{remote};
+        }
+        catch (const std::exception& e)
+        {
+            srouter::log::info(logcat, "Invalid remote address: {}", e.what());
+            return std::nullopt;
+        }
+
+        return context->router->loop.call_get([&r = context->router, addr = std::move(netaddr)]() {
+            std::optional<snode_path> ret;
+            if (auto s = r->session_endpoint().get_session(addr); s)
+            {
+                ret = s->current_path();
+            }
+            return ret;
+        });
+    }
+
+    std::vector<session_path> SessionRouter::get_all_session_paths()
+    {
+        return context->router->loop.call_get([&r = context->router]() {
+            std::vector<session_path> ret;
+            auto f = [&ret](const srouter::NetworkAddress& addr, const srouter::session::Session& s) {
+                ret.emplace_back(s.current_path(), addr.to_string());
+            };
+            return ret;
+        });
+    }
+
 }  // namespace session::router

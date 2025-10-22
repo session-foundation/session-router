@@ -5,6 +5,7 @@
 #include "messages/dht.hpp"
 #include "messages/fetch.hpp"
 #include "messages/path.hpp"
+#include "nodedb.hpp"
 #include "path_handler.hpp"
 #include "profiling.hpp"
 #include "router/router.hpp"
@@ -303,6 +304,17 @@ namespace srouter::path
             fmt::join(hops | std::views::transform([](auto& h) { return h.router_id.short_string(); }), "⟷"));
     }
     path_hop_stringifier Path::hop_string() const { return {hops}; }
+
+    std::vector<std::pair<std::string, std::string>> Path::get_hops_strings_and_ips() const
+    {
+        std::vector<std::pair<std::string, std::string>> ret;
+        for (const auto& hop : hops)
+        {
+            auto rc = _router.node_db().get_rc(hop.router_id);
+            ret.emplace_back(NetworkAddress{hop.router_id, false}.to_string(), rc->addr().to_ipv4().to_string());
+        }
+        return ret;
+    }
 
     nlohmann::json Path::ExtractStatus() const
     {

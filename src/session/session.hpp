@@ -233,6 +233,8 @@ namespace srouter
             // session, but also sometimes called in other places (e.g. if we need new paths ASAP
             // rather than waiting for the next tick)
             virtual void tick([[maybe_unused]] std::chrono::milliseconds now) {}
+
+            virtual std::vector<std::pair<std::string, std::string>> current_path() const { return {}; };
         };
 
         class OutboundSession : public path::PathHandler, public Session
@@ -314,6 +316,8 @@ namespace srouter
             std::string to_string() const override;
 
             inline static constexpr int MAX_QUEUED_PACKETS = 30;
+
+            std::vector<std::pair<std::string, std::string>> current_path() const override;
         };
 
         // Outbound Session to Remote Relay
@@ -416,6 +420,8 @@ namespace srouter
                 handlers::SessionEndpoint& parent, std::shared_ptr<path::Path> p, std::vector<std::byte>&& request);
 
             void handle_path_switch(HopID pivot, std::shared_ptr<path::Path> path);
+
+            std::vector<std::pair<std::string, std::string>> current_path() const override;
 
             std::string to_string() const override;
         };

@@ -78,6 +78,8 @@ namespace srouter::path
 
         path_hop_stringifier hop_string() const;
 
+        std::vector<std::pair<std::string, std::string>> get_hops_strings_and_ips() const;
+
         std::chrono::milliseconds LastRemoteActivityAt() const { return last_recv_msg; }
 
         void do_ping(std::chrono::milliseconds start_time);
