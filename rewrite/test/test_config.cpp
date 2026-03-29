@@ -1,5 +1,4 @@
 #include <catch2/catch_test_macros.hpp>
-
 #include <sr/node/config.hpp>
 
 #include <filesystem>
@@ -7,14 +6,16 @@
 
 using namespace sr::node;
 
-static std::filesystem::path write_temp_config(const std::string& content) {
+static std::filesystem::path write_temp_config(const std::string& content)
+{
     auto path = std::filesystem::temp_directory_path() / "sr_test_config.ini";
     std::ofstream f{path};
     f << content;
     return path;
 }
 
-TEST_CASE("Config defaults are sane", "[node][config]") {
+TEST_CASE("Config defaults are sane", "[node][config]")
+{
     Config cfg;
     REQUIRE(cfg.listen_port == 1090);
     REQUIRE(cfg.is_relay == false);
@@ -24,7 +25,8 @@ TEST_CASE("Config defaults are sane", "[node][config]") {
     REQUIRE(cfg.tick_interval == std::chrono::milliseconds{250});
 }
 
-TEST_CASE("Config from INI file", "[node][config]") {
+TEST_CASE("Config from INI file", "[node][config]")
+{
     auto path = write_temp_config(R"(
 [router]
 is-relay = true
@@ -67,7 +69,8 @@ file = /tmp/bootstrap2.signed
     std::filesystem::remove(path);
 }
 
-TEST_CASE("Config from INI ignores comments and blanks", "[node][config]") {
+TEST_CASE("Config from INI ignores comments and blanks", "[node][config]")
+{
     auto path = write_temp_config(R"(
 # This is a comment
 ; So is this
@@ -83,17 +86,20 @@ port = 3333
     std::filesystem::remove(path);
 }
 
-TEST_CASE("Config from_file throws on missing file", "[node][config]") {
+TEST_CASE("Config from_file throws on missing file", "[node][config]")
+{
     REQUIRE_THROWS(Config::from_file("/nonexistent/path.ini"));
 }
 
-TEST_CASE("Config from_args with --relay", "[node][config]") {
+TEST_CASE("Config from_args with --relay", "[node][config]")
+{
     const char* args[] = {"session-router", "--relay"};
     auto cfg = Config::from_args(2, const_cast<char**>(args));
     REQUIRE(cfg.is_relay == true);
 }
 
-TEST_CASE("Config from_args with --config", "[node][config]") {
+TEST_CASE("Config from_args with --config", "[node][config]")
+{
     auto path = write_temp_config("[network]\nport = 4444\n");
     std::string path_str = path.string();
     const char* args[] = {"session-router", "--config", path_str.c_str()};

@@ -1,15 +1,14 @@
-#include <catch2/catch_test_macros.hpp>
-
-#include <sr/crypto/bt.hpp>
-#include <sr/contact/relay_contact.hpp>
-#include <sr/crypto/types.hpp>
-
 #include <arpa/inet.h>
+#include <catch2/catch_test_macros.hpp>
+#include <sr/contact/relay_contact.hpp>
+#include <sr/crypto/bt.hpp>
+#include <sr/crypto/types.hpp>
 
 using namespace sr::contact;
 using namespace sr::crypto;
 
-TEST_CASE("BT encode/decode basic dict", "[bt]") {
+TEST_CASE("BT encode/decode basic dict", "[bt]")
+{
     std::string buf;
     {
         oxenc::bt_dict_producer dp{};
@@ -25,7 +24,8 @@ TEST_CASE("BT encode/decode basic dict", "[bt]") {
     REQUIRE(dc.consume_integer<int>() == 42);
 }
 
-TEST_CASE("RelayContact BT round-trip", "[bt][contact]") {
+TEST_CASE("RelayContact BT round-trip", "[bt][contact]")
+{
     auto kp = Ed25519KeyPair::generate();
     RouterID rid{kp.pk};
     RelayAddress addr{htonl(0x7F000001), 1090};  // 127.0.0.1:1090
@@ -51,7 +51,8 @@ TEST_CASE("RelayContact BT round-trip", "[bt][contact]") {
     REQUIRE(parsed->timestamp() == now_s);
 }
 
-TEST_CASE("RelayContact from_bt with invalid data returns nullopt", "[bt][contact]") {
+TEST_CASE("RelayContact from_bt with invalid data returns nullopt", "[bt][contact]")
+{
     std::vector<std::byte> garbage(10);
     randombytes_buf(garbage.data(), garbage.size());
 
@@ -59,12 +60,14 @@ TEST_CASE("RelayContact from_bt with invalid data returns nullopt", "[bt][contac
     REQUIRE_FALSE(parsed.has_value());
 }
 
-TEST_CASE("RelayContact from_bt with empty data returns nullopt", "[bt][contact]") {
+TEST_CASE("RelayContact from_bt with empty data returns nullopt", "[bt][contact]")
+{
     auto parsed = RelayContact::from_bt({});
     REQUIRE_FALSE(parsed.has_value());
 }
 
-TEST_CASE("BT to_bytes and to_sv round-trip", "[bt]") {
+TEST_CASE("BT to_bytes and to_sv round-trip", "[bt]")
+{
     std::string original = "d5:helloi42ee";
     auto bytes = sr::bt::to_bytes(original);
     auto sv = sr::bt::to_sv(bytes);

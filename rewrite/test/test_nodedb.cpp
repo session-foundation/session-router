@@ -1,12 +1,12 @@
 #include <catch2/catch_test_macros.hpp>
-
 #include <sr/contact/nodedb.hpp>
 #include <sr/crypto/types.hpp>
 
 using namespace sr::contact;
 using namespace sr::crypto;
 
-static RelayContact make_rc() {
+static RelayContact make_rc()
+{
     auto kp = Ed25519KeyPair::generate();
     RouterID rid{kp.pk};
     RelayAddress addr{0x0100007F, 1090};
@@ -16,7 +16,8 @@ static RelayContact make_rc() {
     return rc;
 }
 
-TEST_CASE("NodeDB put and get", "[contact][nodedb]") {
+TEST_CASE("NodeDB put and get", "[contact][nodedb]")
+{
     NodeDB db;
     auto rc = make_rc();
     db.put_rc(rc);
@@ -28,7 +29,8 @@ TEST_CASE("NodeDB put and get", "[contact][nodedb]") {
     REQUIRE(got->router_id() == rc.router_id());
 }
 
-TEST_CASE("NodeDB remove", "[contact][nodedb]") {
+TEST_CASE("NodeDB remove", "[contact][nodedb]")
+{
     NodeDB db;
     auto rc = make_rc();
     db.put_rc(rc);
@@ -37,13 +39,15 @@ TEST_CASE("NodeDB remove", "[contact][nodedb]") {
     REQUIRE_FALSE(db.has_rc(rc.router_id()));
 }
 
-TEST_CASE("NodeDB get missing returns nullopt", "[contact][nodedb]") {
+TEST_CASE("NodeDB get missing returns nullopt", "[contact][nodedb]")
+{
     NodeDB db;
     auto kp = Ed25519KeyPair::generate();
     REQUIRE_FALSE(db.get_rc(RouterID{kp.pk}).has_value());
 }
 
-TEST_CASE("NodeDB random_rcs", "[contact][nodedb]") {
+TEST_CASE("NodeDB random_rcs", "[contact][nodedb]")
+{
     NodeDB db;
     for (int i = 0; i < 20; ++i)
         db.put_rc(make_rc());
@@ -58,10 +62,12 @@ TEST_CASE("NodeDB random_rcs", "[contact][nodedb]") {
     REQUIRE(seen.size() == 5);
 }
 
-TEST_CASE("NodeDB random_rcs with exclusion", "[contact][nodedb]") {
+TEST_CASE("NodeDB random_rcs with exclusion", "[contact][nodedb]")
+{
     NodeDB db;
     std::vector<RelayContact> all;
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < 10; ++i)
+    {
         auto rc = make_rc();
         all.push_back(rc);
         db.put_rc(rc);
@@ -73,12 +79,14 @@ TEST_CASE("NodeDB random_rcs with exclusion", "[contact][nodedb]") {
 
     auto rcs = db.random_rcs(8, exclude);
     REQUIRE(rcs.size() == 8);
-    for (const auto& rc : rcs) {
+    for (const auto& rc : rcs)
+    {
         REQUIRE_FALSE(exclude.contains(rc.router_id()));
     }
 }
 
-TEST_CASE("NodeDB random_rcs more than available", "[contact][nodedb]") {
+TEST_CASE("NodeDB random_rcs more than available", "[contact][nodedb]")
+{
     NodeDB db;
     for (int i = 0; i < 3; ++i)
         db.put_rc(make_rc());
@@ -87,7 +95,8 @@ TEST_CASE("NodeDB random_rcs more than available", "[contact][nodedb]") {
     REQUIRE(rcs.size() == 3);
 }
 
-TEST_CASE("NodeDB purge_expired", "[contact][nodedb]") {
+TEST_CASE("NodeDB purge_expired", "[contact][nodedb]")
+{
     NodeDB db;
 
     // Add fresh RC
@@ -108,7 +117,8 @@ TEST_CASE("NodeDB purge_expired", "[contact][nodedb]") {
     REQUIRE(db.has_rc(fresh.router_id()));
 }
 
-TEST_CASE("NodeDB has_min_rcs", "[contact][nodedb]") {
+TEST_CASE("NodeDB has_min_rcs", "[contact][nodedb]")
+{
     NodeDB db;
     REQUIRE_FALSE(db.has_min_rcs(6));
 
@@ -117,7 +127,8 @@ TEST_CASE("NodeDB has_min_rcs", "[contact][nodedb]") {
     REQUIRE(db.has_min_rcs(6));
 }
 
-TEST_CASE("NodeDB bucket hashes deterministic", "[contact][nodedb]") {
+TEST_CASE("NodeDB bucket hashes deterministic", "[contact][nodedb]")
+{
     NodeDB db;
     for (int i = 0; i < 10; ++i)
         db.put_rc(make_rc());
@@ -127,7 +138,8 @@ TEST_CASE("NodeDB bucket hashes deterministic", "[contact][nodedb]") {
     REQUIRE(h1 == h2);
 }
 
-TEST_CASE("NodeDB bucket hashes change with data", "[contact][nodedb]") {
+TEST_CASE("NodeDB bucket hashes change with data", "[contact][nodedb]")
+{
     NodeDB db;
     auto rc1 = make_rc();
     db.put_rc(rc1);

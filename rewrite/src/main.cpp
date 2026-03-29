@@ -5,15 +5,19 @@
 
 static sr::node::Node* g_node = nullptr;
 
-static void signal_handler(int sig) {
-    if (g_node) {
+static void signal_handler(int sig)
+{
+    if (g_node)
+    {
         std::cout << "\nReceived signal " << sig << ", shutting down...\n";
         g_node->stop();
     }
 }
 
-int main(int argc, char** argv) {
-    try {
+int main(int argc, char** argv)
+{
+    try
+    {
         auto config = sr::node::Config::from_args(argc, argv);
 
         sr::node::Node node{std::move(config)};
@@ -25,7 +29,9 @@ int main(int argc, char** argv) {
         node.run();
 
         return 0;
-    } catch (const std::exception& e) {
+    }
+    catch (const std::exception& e)
+    {
         std::cerr << "Fatal: " << e.what() << "\n";
         return 1;
     }

@@ -12,55 +12,55 @@
 #include <unordered_set>
 #include <vector>
 
-namespace sr::contact {
+namespace sr::contact
+{
 
-// NodeDB manages the routing table: known relay contacts, bootstrap,
-// bucket hashing for incremental sync, and hop selection for path building.
+    // NodeDB manages the routing table: known relay contacts, bootstrap,
+    // bucket hashing for incremental sync, and hop selection for path building.
 
-class NodeDB {
-public:
-    NodeDB() = default;
+    class NodeDB
+    {
+      public:
+        NodeDB() = default;
 
-    // Store a relay contact (verified externally before calling this)
-    bool put_rc(const RelayContact& rc);
+        // Store a relay contact (verified externally before calling this)
+        bool put_rc(const RelayContact& rc);
 
-    // Remove a relay contact
-    void remove_rc(const RouterID& rid);
+        // Remove a relay contact
+        void remove_rc(const RouterID& rid);
 
-    // Lookup
-    std::optional<RelayContact> get_rc(const RouterID& rid) const;
-    bool has_rc(const RouterID& rid) const;
+        // Lookup
+        std::optional<RelayContact> get_rc(const RouterID& rid) const;
+        bool has_rc(const RouterID& rid) const;
 
-    // Get all known RouterIDs
-    std::vector<RouterID> all_router_ids() const;
+        // Get all known RouterIDs
+        std::vector<RouterID> all_router_ids() const;
 
-    // Get N random relay contacts for path building.
-    // Excludes the given set (e.g., already-selected hops).
-    std::vector<RelayContact> random_rcs(
-        size_t count,
-        const std::unordered_set<RouterID>& exclude = {}) const;
+        // Get N random relay contacts for path building.
+        // Excludes the given set (e.g., already-selected hops).
+        std::vector<RelayContact> random_rcs(size_t count, const std::unordered_set<RouterID>& exclude = {}) const;
 
-    // Purge expired RCs
-    size_t purge_expired(std::chrono::system_clock::time_point now);
+        // Purge expired RCs
+        size_t purge_expired(std::chrono::system_clock::time_point now);
 
-    // Bucket hashing for incremental RC sync.
-    // 128 buckets, bucket index = byte 16 of RouterID & 0x7F.
-    // Bucket hash = XOR of all RC hashes in that bucket.
-    static constexpr size_t NUM_BUCKETS = 128;
-    using BucketHashes = std::array<sr::crypto::Bytes<8>, NUM_BUCKETS>;
+        // Bucket hashing for incremental RC sync.
+        // 128 buckets, bucket index = byte 16 of RouterID & 0x7F.
+        // Bucket hash = XOR of all RC hashes in that bucket.
+        static constexpr size_t NUM_BUCKETS = 128;
+        using BucketHashes = std::array<sr::crypto::Bytes<8>, NUM_BUCKETS>;
 
-    BucketHashes compute_bucket_hashes() const;
+        BucketHashes compute_bucket_hashes() const;
 
-    // Stats
-    size_t size() const;
-    bool has_min_rcs(size_t min = 6) const;
+        // Stats
+        size_t size() const;
+        bool has_min_rcs(size_t min = 6) const;
 
-private:
-    mutable std::mutex _mtx;
-    std::unordered_map<RouterID, RelayContact> _rcs;
-    mutable std::mt19937 _rng{std::random_device{}()};
+      private:
+        mutable std::mutex _mtx;
+        std::unordered_map<RouterID, RelayContact> _rcs;
+        mutable std::mt19937 _rng{std::random_device{}()};
 
-    static size_t bucket_index(const RouterID& rid);
-};
+        static size_t bucket_index(const RouterID& rid);
+    };
 
 }  // namespace sr::contact

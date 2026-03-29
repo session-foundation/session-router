@@ -1,11 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
-
 #include <sr/crypto/sealed_box.hpp>
 #include <sr/crypto/types.hpp>
 
 using namespace sr::crypto;
 
-TEST_CASE("Sealed box round-trip", "[crypto][sealed_box]") {
+TEST_CASE("Sealed box round-trip", "[crypto][sealed_box]")
+{
     auto kp = Ed25519KeyPair::generate();
     std::vector<std::byte> plaintext(128);
     randombytes_buf(plaintext.data(), plaintext.size());
@@ -18,7 +18,8 @@ TEST_CASE("Sealed box round-trip", "[crypto][sealed_box]") {
     REQUIRE(*pt == plaintext);
 }
 
-TEST_CASE("Sealed box wrong key fails", "[crypto][sealed_box]") {
+TEST_CASE("Sealed box wrong key fails", "[crypto][sealed_box]")
+{
     auto sender_target = Ed25519KeyPair::generate();
     auto wrong_key = Ed25519KeyPair::generate();
     std::vector<std::byte> plaintext(64);
@@ -29,7 +30,8 @@ TEST_CASE("Sealed box wrong key fails", "[crypto][sealed_box]") {
     REQUIRE_FALSE(pt.has_value());
 }
 
-TEST_CASE("Sealed box tampered ciphertext fails", "[crypto][sealed_box]") {
+TEST_CASE("Sealed box tampered ciphertext fails", "[crypto][sealed_box]")
+{
     auto kp = Ed25519KeyPair::generate();
     std::vector<std::byte> plaintext(64);
     randombytes_buf(plaintext.data(), plaintext.size());
@@ -41,7 +43,8 @@ TEST_CASE("Sealed box tampered ciphertext fails", "[crypto][sealed_box]") {
     REQUIRE_FALSE(pt.has_value());
 }
 
-TEST_CASE("Sealed box truncated ciphertext fails", "[crypto][sealed_box]") {
+TEST_CASE("Sealed box truncated ciphertext fails", "[crypto][sealed_box]")
+{
     auto kp = Ed25519KeyPair::generate();
     std::vector<std::byte> short_ct(SEAL_OVERHEAD - 1);
 
@@ -49,7 +52,8 @@ TEST_CASE("Sealed box truncated ciphertext fails", "[crypto][sealed_box]") {
     REQUIRE_FALSE(pt.has_value());
 }
 
-TEST_CASE("Sealed box empty plaintext", "[crypto][sealed_box]") {
+TEST_CASE("Sealed box empty plaintext", "[crypto][sealed_box]")
+{
     auto kp = Ed25519KeyPair::generate();
     std::vector<std::byte> empty;
 

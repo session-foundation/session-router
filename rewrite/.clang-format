@@ -1,0 +1,93 @@
+BasedOnStyle: Google
+
+# alignment
+AlignAfterOpenBracket: AlwaysBreak
+AlignConsecutiveAssignments: 'false'
+AlignConsecutiveDeclarations: 'false'
+AlignEscapedNewlinesLeft: 'true'
+AlignOperands: 'false'
+AlignTrailingComments: 'true'
+ColumnLimit: 120
+PointerAlignment: Left
+QualifierAlignment: Custom
+QualifierOrder: ['inline', 'static', 'constexpr', 'const', 'type']
+ReferenceAlignment: Left
+
+# bracing
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterCaseLabel: true
+  AfterClass: true
+  AfterControlStatement: true
+  AfterEnum: true
+  AfterFunction: true
+  AfterNamespace: true
+  AfterObjCDeclaration: true
+  AfterStruct: true
+  AfterUnion: true
+  AfterExternBlock: true
+  BeforeCatch: true
+  BeforeElse: true
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
+
+# breaking
+AlwaysBreakAfterDefinitionReturnType: None
+AlwaysBreakAfterReturnType: None
+AlwaysBreakTemplateDeclarations: 'true'
+BreakBeforeBinaryOperators: NonAssignment
+BreakBeforeTernaryOperators: 'true'
+BreakConstructorInitializers: BeforeColon
+
+# indentation
+AccessModifierOffset: -2
+ConstructorInitializerIndentWidth: 4
+ContinuationIndentWidth: 4
+IndentWidth: 4
+NamespaceIndentation: All
+
+# shorties
+AllowShortBlocksOnASingleLine: 'false'
+AllowShortCaseLabelsOnASingleLine: 'false'
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: 'false'
+AllowShortLoopsOnASingleLine: 'false'
+
+# spacing
+KeepEmptyLinesAtTheStartOfBlocks: 'false'
+PenaltyBreakString: '3'
+SpaceBeforeParens: ControlStatements
+SpacesInAngles: 'false'
+SpacesInContainerLiterals: 'false'
+SpacesInParentheses: 'false'
+SpacesInSquareBrackets: 'false'
+Standard: c++20
+UseTab: Never
+
+# wrapping
+PackConstructorInitializers: NextLine
+BinPackParameters: 'false'
+BinPackArguments: 'false'
+
+# Include block sorting in the following order:
+#   - Main header for source file (clang-format default prioritizes this first)
+#   - Relative path includes in quotation marks
+#   - Absolute path includes in angle brackets
+#   - External dependencies
+#   - System dependencies
+SortIncludes: CaseInsensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '".+\.h'
+    Priority: 2
+  - Regex: '^<llarp'
+    Priority: 3
+  - Regex: '<winsock2\.h>'
+    Priority: 4
+  - Regex: '<windows\.h>'
+    Priority: 5
+  - Regex: '^<.*\.h(pp)?>$'
+    Priority: 6
+  - Regex: '(<)(.)+(>)'
+    Priority: 7

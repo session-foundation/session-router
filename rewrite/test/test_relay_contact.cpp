@@ -1,12 +1,12 @@
 #include <catch2/catch_test_macros.hpp>
-
 #include <sr/contact/relay_contact.hpp>
 #include <sr/crypto/types.hpp>
 
 using namespace sr::contact;
 using namespace sr::crypto;
 
-static RelayContact make_rc(const Ed25519KeyPair& kp) {
+static RelayContact make_rc(const Ed25519KeyPair& kp)
+{
     RouterID rid{kp.pk};
     RelayAddress addr{0x0100007F, 1090};  // 127.0.0.1:1090
     auto now = std::chrono::system_clock::now();
@@ -15,13 +15,15 @@ static RelayContact make_rc(const Ed25519KeyPair& kp) {
     return rc;
 }
 
-TEST_CASE("RelayContact sign and verify", "[contact][relay_contact]") {
+TEST_CASE("RelayContact sign and verify", "[contact][relay_contact]")
+{
     auto kp = Ed25519KeyPair::generate();
     auto rc = make_rc(kp);
     REQUIRE(rc.verify());
 }
 
-TEST_CASE("RelayContact wrong key fails verify", "[contact][relay_contact]") {
+TEST_CASE("RelayContact wrong key fails verify", "[contact][relay_contact]")
+{
     auto kp1 = Ed25519KeyPair::generate();
     auto kp2 = Ed25519KeyPair::generate();
 
@@ -39,7 +41,8 @@ TEST_CASE("RelayContact wrong key fails verify", "[contact][relay_contact]") {
     REQUIRE_FALSE(bad_rc.verify());
 }
 
-TEST_CASE("RelayContact expiry", "[contact][relay_contact]") {
+TEST_CASE("RelayContact expiry", "[contact][relay_contact]")
+{
     auto kp = Ed25519KeyPair::generate();
     auto old_time = std::chrono::system_clock::now() - std::chrono::hours(2);
     RouterID rid{kp.pk};
@@ -50,7 +53,8 @@ TEST_CASE("RelayContact expiry", "[contact][relay_contact]") {
     REQUIRE_FALSE(rc.is_expired(std::chrono::system_clock::now(), std::chrono::hours(3)));
 }
 
-TEST_CASE("RelayContact accessors", "[contact][relay_contact]") {
+TEST_CASE("RelayContact accessors", "[contact][relay_contact]")
+{
     auto kp = Ed25519KeyPair::generate();
     auto rc = make_rc(kp);
 

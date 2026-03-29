@@ -1,26 +1,27 @@
 #include <catch2/catch_test_macros.hpp>
-
+#include <sodium.h>
 #include <sr/crypto/aead.hpp>
 #include <sr/crypto/types.hpp>
 
-#include <sodium.h>
-
 using namespace sr::crypto;
 
-static SymmetricKey random_key() {
+static SymmetricKey random_key()
+{
     sodium_init_once();
     SymmetricKey k;
     randombytes_buf(k.data(), k.size());
     return k;
 }
 
-static Nonce random_nonce() {
+static Nonce random_nonce()
+{
     Nonce n;
     randombytes_buf(n.data(), n.size());
     return n;
 }
 
-TEST_CASE("AEAD encrypt/decrypt round-trip", "[crypto][aead]") {
+TEST_CASE("AEAD encrypt/decrypt round-trip", "[crypto][aead]")
+{
     auto key = random_key();
     auto nonce = random_nonce();
     std::vector<std::byte> plaintext(100);
@@ -34,7 +35,8 @@ TEST_CASE("AEAD encrypt/decrypt round-trip", "[crypto][aead]") {
     REQUIRE(*pt == plaintext);
 }
 
-TEST_CASE("AEAD wrong key fails", "[crypto][aead]") {
+TEST_CASE("AEAD wrong key fails", "[crypto][aead]")
+{
     auto key1 = random_key();
     auto key2 = random_key();
     auto nonce = random_nonce();
@@ -46,7 +48,8 @@ TEST_CASE("AEAD wrong key fails", "[crypto][aead]") {
     REQUIRE_FALSE(pt.has_value());
 }
 
-TEST_CASE("AEAD tampered ciphertext fails", "[crypto][aead]") {
+TEST_CASE("AEAD tampered ciphertext fails", "[crypto][aead]")
+{
     auto key = random_key();
     auto nonce = random_nonce();
     std::vector<std::byte> plaintext(64);
@@ -59,7 +62,8 @@ TEST_CASE("AEAD tampered ciphertext fails", "[crypto][aead]") {
     REQUIRE_FALSE(pt.has_value());
 }
 
-TEST_CASE("AEAD too-short ciphertext fails", "[crypto][aead]") {
+TEST_CASE("AEAD too-short ciphertext fails", "[crypto][aead]")
+{
     auto key = random_key();
     auto nonce = random_nonce();
     std::vector<std::byte> short_ct(AEAD_TAG_SIZE - 1);
@@ -68,7 +72,8 @@ TEST_CASE("AEAD too-short ciphertext fails", "[crypto][aead]") {
     REQUIRE_FALSE(pt.has_value());
 }
 
-TEST_CASE("AEAD inplace matches allocating", "[crypto][aead]") {
+TEST_CASE("AEAD inplace matches allocating", "[crypto][aead]")
+{
     auto key = random_key();
     auto nonce = random_nonce();
     std::vector<std::byte> plaintext(80);
@@ -85,7 +90,8 @@ TEST_CASE("AEAD inplace matches allocating", "[crypto][aead]") {
     REQUIRE(buf == ct_alloc);
 }
 
-TEST_CASE("xchacha20 stream cipher round-trip", "[crypto][aead]") {
+TEST_CASE("xchacha20 stream cipher round-trip", "[crypto][aead]")
+{
     auto key = random_key();
     auto nonce = random_nonce();
     std::vector<std::byte> original(128);
@@ -99,7 +105,8 @@ TEST_CASE("xchacha20 stream cipher round-trip", "[crypto][aead]") {
     REQUIRE(buf == original);  // XOR cipher: encrypt twice = plaintext
 }
 
-TEST_CASE("AEAD empty plaintext", "[crypto][aead]") {
+TEST_CASE("AEAD empty plaintext", "[crypto][aead]")
+{
     auto key = random_key();
     auto nonce = random_nonce();
     std::vector<std::byte> empty;

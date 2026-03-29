@@ -1,11 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
-
 #include <sr/crypto/dh.hpp>
 #include <sr/crypto/types.hpp>
 
 using namespace sr::crypto;
 
-TEST_CASE("DH both sides derive same shared secret", "[crypto][dh]") {
+TEST_CASE("DH both sides derive same shared secret", "[crypto][dh]")
+{
     auto client = Ed25519KeyPair::generate();
     auto server = Ed25519KeyPair::generate();
     Nonce nonce;
@@ -19,7 +19,8 @@ TEST_CASE("DH both sides derive same shared secret", "[crypto][dh]") {
     REQUIRE(shared_c == shared_s);
 }
 
-TEST_CASE("DH swapped roles produce different secret", "[crypto][dh]") {
+TEST_CASE("DH swapped roles produce different secret", "[crypto][dh]")
+{
     auto a = Ed25519KeyPair::generate();
     auto b = Ed25519KeyPair::generate();
     Nonce nonce;
@@ -33,7 +34,8 @@ TEST_CASE("DH swapped roles produce different secret", "[crypto][dh]") {
     REQUIRE(shared1 != shared2);
 }
 
-TEST_CASE("DH different nonce produces different secret", "[crypto][dh]") {
+TEST_CASE("DH different nonce produces different secret", "[crypto][dh]")
+{
     auto client = Ed25519KeyPair::generate();
     auto server = Ed25519KeyPair::generate();
     Nonce n1, n2;
@@ -46,7 +48,8 @@ TEST_CASE("DH different nonce produces different secret", "[crypto][dh]") {
     REQUIRE(s1 != s2);
 }
 
-TEST_CASE("XOR nonce derivation is deterministic", "[crypto][dh]") {
+TEST_CASE("XOR nonce derivation is deterministic", "[crypto][dh]")
+{
     SharedSecret shared;
     randombytes_buf(shared.data(), shared.size());
 
@@ -56,7 +59,8 @@ TEST_CASE("XOR nonce derivation is deterministic", "[crypto][dh]") {
     REQUIRE(xn1 == xn2);
 }
 
-TEST_CASE("XOR nonce differs for different shared secrets", "[crypto][dh]") {
+TEST_CASE("XOR nonce differs for different shared secrets", "[crypto][dh]")
+{
     SharedSecret s1, s2;
     randombytes_buf(s1.data(), s1.size());
     randombytes_buf(s2.data(), s2.size());
@@ -64,7 +68,8 @@ TEST_CASE("XOR nonce differs for different shared secrets", "[crypto][dh]") {
     REQUIRE(derive_xor_nonce(s1) != derive_xor_nonce(s2));
 }
 
-TEST_CASE("BLAKE2b hash basic", "[crypto][dh]") {
+TEST_CASE("BLAKE2b hash basic", "[crypto][dh]")
+{
     std::vector<std::byte> data(32);
     randombytes_buf(data.data(), data.size());
 
@@ -77,7 +82,8 @@ TEST_CASE("BLAKE2b hash basic", "[crypto][dh]") {
     REQUIRE(h1 != h3);
 }
 
-TEST_CASE("BLAKE2b with key differs from without", "[crypto][dh]") {
+TEST_CASE("BLAKE2b with key differs from without", "[crypto][dh]")
+{
     std::vector<std::byte> data(32);
     randombytes_buf(data.data(), data.size());
     std::vector<std::byte> key(16);

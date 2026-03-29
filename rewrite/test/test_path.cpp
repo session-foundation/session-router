@@ -1,25 +1,22 @@
 #include <catch2/catch_test_macros.hpp>
-
-#include <sr/path/path.hpp>
 #include <sr/crypto/dh.hpp>
 #include <sr/crypto/types.hpp>
+#include <sr/path/path.hpp>
 
 using namespace sr::path;
 using namespace sr::crypto;
 
-static Hop make_hop() {
+static Hop make_hop()
+{
     auto kp = Ed25519KeyPair::generate();
     SharedSecret ss;
     randombytes_buf(ss.data(), ss.size());
     auto xn = derive_xor_nonce(ss);
-    return Hop{
-        sr::contact::RouterID{kp.pk},
-        ss, xn,
-        random_hop_id(), random_hop_id()
-    };
+    return Hop{sr::contact::RouterID{kp.pk}, ss, xn, random_hop_id(), random_hop_id()};
 }
 
-TEST_CASE("Path encrypt/decrypt round-trip", "[path]") {
+TEST_CASE("Path encrypt/decrypt round-trip", "[path]")
+{
     std::vector<Hop> hops = {make_hop(), make_hop(), make_hop()};
     Path path{hops};
 
@@ -36,11 +33,13 @@ TEST_CASE("Path encrypt/decrypt round-trip", "[path]") {
     // Simulate relay-side peeling: each hop peels one layer
     // Forward order, XOR nonce between hops
     Nonce relay_nonce = nonce;
-    for (size_t i = 0; i < hops.size(); ++i) {
+    for (size_t i = 0; i < hops.size(); ++i)
+    {
         SymmetricKey key;
         std::memcpy(key.data(), hops[i].shared_secret.data(), 32);
         xchacha20_inplace(encrypted, key, relay_nonce);
-        if (i + 1 < hops.size()) {
+        if (i + 1 < hops.size())
+        {
             for (size_t j = 0; j < relay_nonce.size(); ++j)
                 relay_nonce[j] ^= hops[i].xor_nonce[j];
         }
@@ -49,7 +48,8 @@ TEST_CASE("Path encrypt/decrypt round-trip", "[path]") {
     REQUIRE(encrypted == plaintext);
 }
 
-TEST_CASE("Path decrypt reverses encrypt", "[path]") {
+TEST_CASE("Path decrypt reverses encrypt", "[path]")
+{
     std::vector<Hop> hops = {make_hop(), make_hop()};
     Path path{hops};
 
@@ -62,11 +62,13 @@ TEST_CASE("Path decrypt reverses encrypt", "[path]") {
     // Each relay encrypts in forward order
     std::vector<std::byte> data = original;
     Nonce relay_nonce = nonce;
-    for (size_t i = 0; i < hops.size(); ++i) {
+    for (size_t i = 0; i < hops.size(); ++i)
+    {
         SymmetricKey key;
         std::memcpy(key.data(), hops[i].shared_secret.data(), 32);
         xchacha20_inplace(data, key, relay_nonce);
-        if (i + 1 < hops.size()) {
+        if (i + 1 < hops.size())
+        {
             for (size_t j = 0; j < relay_nonce.size(); ++j)
                 relay_nonce[j] ^= hops[i].xor_nonce[j];
         }
@@ -79,7 +81,8 @@ TEST_CASE("Path decrypt reverses encrypt", "[path]") {
     REQUIRE(*result == original);
 }
 
-TEST_CASE("Path single hop encrypt/decrypt", "[path]") {
+TEST_CASE("Path single hop encrypt/decrypt", "[path]")
+{
     std::vector<Hop> hops = {make_hop()};
     Path path{hops};
 
@@ -98,7 +101,8 @@ TEST_CASE("Path single hop encrypt/decrypt", "[path]") {
     REQUIRE(encrypted == plaintext);
 }
 
-TEST_CASE("Path expiry", "[path]") {
+TEST_CASE("Path expiry", "[path]")
+{
     std::vector<Hop> hops = {make_hop()};
     auto old = std::chrono::steady_clock::now() - std::chrono::minutes(25);
     Path path{hops, old};
@@ -106,14 +110,16 @@ TEST_CASE("Path expiry", "[path]") {
     REQUIRE(path.is_expired(std::chrono::steady_clock::now()));
 }
 
-TEST_CASE("Path not expired when fresh", "[path]") {
+TEST_CASE("Path not expired when fresh", "[path]")
+{
     std::vector<Hop> hops = {make_hop()};
     Path path{hops};
 
     REQUIRE_FALSE(path.is_expired(std::chrono::steady_clock::now()));
 }
 
-TEST_CASE("Path established flag", "[path]") {
+TEST_CASE("Path established flag", "[path]")
+{
     Path path{std::vector<Hop>{make_hop()}};
     REQUIRE_FALSE(path.is_established());
     path.set_established();

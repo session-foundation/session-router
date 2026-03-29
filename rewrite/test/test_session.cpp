@@ -1,20 +1,21 @@
 #include <catch2/catch_test_macros.hpp>
-
-#include <sr/session/session.hpp>
 #include <sr/crypto/session_keys.hpp>
 #include <sr/crypto/types.hpp>
+#include <sr/session/session.hpp>
 
 using namespace sr::session;
 using namespace sr::crypto;
 
-static SessionKeys make_test_keys() {
+static SessionKeys make_test_keys()
+{
     SessionKeys keys;
     randombytes_buf(keys.key_out.data(), keys.key_out.size());
     randombytes_buf(keys.key_in.data(), keys.key_in.size());
     return keys;
 }
 
-TEST_CASE("Session encrypt/decrypt round-trip", "[session]") {
+TEST_CASE("Session encrypt/decrypt round-trip", "[session]")
+{
     auto keys_a = make_test_keys();
     // B's inbound = A's outbound, B's outbound = A's inbound
     SessionKeys keys_b;
@@ -36,7 +37,8 @@ TEST_CASE("Session encrypt/decrypt round-trip", "[session]") {
     REQUIRE(*decrypted == plaintext);
 }
 
-TEST_CASE("Session wrong keys fail", "[session]") {
+TEST_CASE("Session wrong keys fail", "[session]")
+{
     auto keys_a = make_test_keys();
     auto keys_wrong = make_test_keys();
 
@@ -52,7 +54,8 @@ TEST_CASE("Session wrong keys fail", "[session]") {
     REQUIRE_FALSE(decrypted.has_value());
 }
 
-TEST_CASE("Session is_established", "[session]") {
+TEST_CASE("Session is_established", "[session]")
+{
     Session s;
     REQUIRE_FALSE(s.is_established());
 
@@ -61,7 +64,8 @@ TEST_CASE("Session is_established", "[session]") {
     REQUIRE(s2.is_established());
 }
 
-TEST_CASE("SessionInit seal/unseal round-trip", "[session]") {
+TEST_CASE("SessionInit seal/unseal round-trip", "[session]")
+{
     auto initiator = Ed25519KeyPair::generate();
     auto receiver = Ed25519KeyPair::generate();
     auto x_kp = X25519KeyPair::generate();
@@ -74,9 +78,7 @@ TEST_CASE("SessionInit seal/unseal round-trip", "[session]") {
     si.tag = random_tag();
     // Sign identity proof
     crypto_sign_detached(
-        as_uchar(si.signature), nullptr,
-        as_uchar(si.identity), si.identity.size(),
-        as_uchar(initiator.sk));
+        as_uchar(si.signature), nullptr, as_uchar(si.identity), si.identity.size(), as_uchar(initiator.sk));
 
     auto sealed = si.seal_for(receiver.pk, initiator.sk);
     REQUIRE(sealed.size() > 0);
@@ -88,7 +90,8 @@ TEST_CASE("SessionInit seal/unseal round-trip", "[session]") {
     REQUIRE(unsealed->tag == si.tag);
 }
 
-TEST_CASE("SessionInit unseal wrong key fails", "[session]") {
+TEST_CASE("SessionInit unseal wrong key fails", "[session]")
+{
     auto initiator = Ed25519KeyPair::generate();
     auto receiver = Ed25519KeyPair::generate();
     auto wrong = Ed25519KeyPair::generate();
@@ -102,7 +105,8 @@ TEST_CASE("SessionInit unseal wrong key fails", "[session]") {
     REQUIRE_FALSE(unsealed.has_value());
 }
 
-TEST_CASE("SessionAccept seal/unseal round-trip", "[session]") {
+TEST_CASE("SessionAccept seal/unseal round-trip", "[session]")
+{
     auto initiator = Ed25519KeyPair::generate();
     auto receiver = Ed25519KeyPair::generate();
     auto x_kp = X25519KeyPair::generate();
@@ -113,9 +117,7 @@ TEST_CASE("SessionAccept seal/unseal round-trip", "[session]") {
     // Fill ciphertext and signature with random for test
     randombytes_buf(sa.mlkem_ciphertext.data(), sa.mlkem_ciphertext.size());
     crypto_sign_detached(
-        as_uchar(sa.signature), nullptr,
-        as_uchar(sa.x_pubkey), sa.x_pubkey.size(),
-        as_uchar(receiver.sk));
+        as_uchar(sa.signature), nullptr, as_uchar(sa.x_pubkey), sa.x_pubkey.size(), as_uchar(receiver.sk));
 
     auto sealed = sa.seal_for(initiator.pk, receiver.sk);
     auto unsealed = SessionAccept::unseal(sealed, initiator.pk, initiator.sk);
@@ -124,7 +126,8 @@ TEST_CASE("SessionAccept seal/unseal round-trip", "[session]") {
     REQUIRE(unsealed->tag == sa.tag);
 }
 
-TEST_CASE("Session empty plaintext", "[session]") {
+TEST_CASE("Session empty plaintext", "[session]")
+{
     auto keys_a = make_test_keys();
     SessionKeys keys_b;
     keys_b.key_in = keys_a.key_out;
