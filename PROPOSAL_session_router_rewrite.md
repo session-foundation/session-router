@@ -10,7 +10,7 @@
 
 I'm Xepayac. I don't write code. I understand systems and communication.
 
-I run a small LLC focused on graph-based system analysis — mapping how complex software actually works, where the problems are, and what the solution looks like. I use a proprietary system for this work that I've been developing for several years.
+I run a small LLC focused on graph-based system analysis — mapping how complex software actually works, where the problems are, and what the solution looks like. I use a proprietary system for this work that I've been developing for several months.
 
 Every line of code in this proposal was written by Claude Code (Anthropic's AI coding tool, Opus model). I directed the analysis, made the architectural decisions, chose the design tradeoffs, and reviewed the results. Claude wrote the C++, the tests, and the audit documentation. I'm being completely transparent about this because the work speaks for itself, and because I believe AI-assisted development done with discipline and rigor produces results that should be judged on merit, not on who typed the characters.
 
