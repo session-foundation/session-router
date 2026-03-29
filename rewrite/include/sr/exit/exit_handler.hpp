@@ -30,8 +30,9 @@ namespace sr::exit
     struct NATEntry
     {
         sr::contact::RouterID client_rid;
-        uint32_t internal_ip;  // client's IP inside the tunnel
-        uint32_t mapped_port;  // port on our external interface
+        uint32_t internal_ip;       // client's IP inside the tunnel
+        uint16_t original_src_port; // client's original source port (host byte order)
+        uint32_t nat_port;          // port assigned on our external interface
         std::chrono::steady_clock::time_point last_activity;
     };
 

@@ -127,12 +127,13 @@ namespace sr::exit
         uint16_t src_port;
         std::memcpy(&src_port, packet.data() + ihl, 2);
 
-        // Find or create NAT entry
-        uint32_t key = _next_port;
+        // Find or create NAT entry — match on (client, original_src_port)
+        uint16_t client_src_port = ntohs(src_port);
+        uint32_t key = 0;
         bool found = false;
         for (auto& [port, entry] : _nat_table)
         {
-            if (entry.client_rid == client && entry.mapped_port == ntohs(src_port))
+            if (entry.client_rid == client && entry.original_src_port == client_src_port)
             {
                 key = port;
                 entry.last_activity = std::chrono::steady_clock::now();
@@ -145,11 +146,13 @@ namespace sr::exit
         {
             NATEntry entry;
             entry.client_rid = client;
-            entry.mapped_port = _next_port;
+            entry.original_src_port = client_src_port;
+            entry.nat_port = _next_port;
             entry.last_activity = std::chrono::steady_clock::now();
             std::memcpy(&entry.internal_ip, packet.data() + 12, 4);
+            key = _next_port;
             _nat_table[_next_port] = entry;
-            key = _next_port++;
+            _next_port++;
             if (_next_port > 65534)
                 _next_port = 10000;
         }
@@ -199,7 +202,7 @@ namespace sr::exit
         std::vector<std::byte> out(packet.begin(), packet.end());
         uint16_t old_port_ne;
         std::memcpy(&old_port_ne, out.data() + ihl + 2, 2);
-        uint16_t orig_port = htons(static_cast<uint16_t>(it->second.mapped_port));
+        uint16_t orig_port = htons(it->second.original_src_port);
         std::memcpy(out.data() + ihl + 2, &orig_port, 2);
         std::memcpy(out.data() + 16, &it->second.internal_ip, 4);
 
