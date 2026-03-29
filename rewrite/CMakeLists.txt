@@ -68,6 +68,8 @@ add_library(ngtcp2_crypto STATIC IMPORTED)
 set_target_properties(ngtcp2_crypto PROPERTIES IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/static-deps/lib/libngtcp2_crypto_gnutls.a")
 
 pkg_check_modules(GNUTLS REQUIRED IMPORTED_TARGET gnutls)
+pkg_check_modules(NETTLE REQUIRED IMPORTED_TARGET nettle)
+pkg_check_modules(HOGWEED REQUIRED IMPORTED_TARGET hogweed)
 pkg_check_modules(LIBEVENT REQUIRED IMPORTED_TARGET libevent_core)
 pkg_check_modules(LIBEVENT_PT REQUIRED IMPORTED_TARGET libevent_pthreads)
 
@@ -85,7 +87,22 @@ add_library(sr_link
 )
 target_include_directories(sr_link PUBLIC include)
 target_link_libraries(sr_link PUBLIC sr_session oxen-quic oxen-logging spdlog fmt
-    ngtcp2 ngtcp2_crypto PkgConfig::GNUTLS PkgConfig::LIBEVENT PkgConfig::LIBEVENT_PT)
+    ngtcp2 ngtcp2_crypto PkgConfig::GNUTLS PkgConfig::NETTLE PkgConfig::HOGWEED
+    PkgConfig::LIBEVENT PkgConfig::LIBEVENT_PT)
+
+# Node library (Layer 5)
+add_library(sr_node
+    src/node/config.cpp
+    src/node/tun.cpp
+    src/node/dns.cpp
+    src/node/node.cpp
+)
+target_include_directories(sr_node PUBLIC include)
+target_link_libraries(sr_node PUBLIC sr_link)
+
+# Main executable
+add_executable(session-router src/main.cpp)
+target_link_libraries(session-router PRIVATE sr_node)
 
 # Tests
 option(SR_TESTS "Build tests" ON)
