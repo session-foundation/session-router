@@ -75,7 +75,7 @@ The entire process — from first reading the codebase to passing the final secu
 
 5. **Polish.** clang-format with upstream style, professional code review, README, complete documentation.
 
-The analysis system is what made this possible. Without it, understanding 37,000 lines of cryptographic networking code well enough to rewrite it correctly would take months. With it, we mapped every dragon and every constraint before writing a line of code.
+Our proprietary analysis system is what made this possible. Without it, understanding 37,000 lines of cryptographic networking code well enough to rewrite it correctly would take months. With it, we mapped every dragon and every constraint before writing a line of code.
 
 ---
 
