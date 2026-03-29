@@ -110,14 +110,18 @@ The full audit document is 1,389 lines and available in the repository.
 
 ## What We're Offering
 
+Everything described above was accomplished in a single overnight session. Analysis, architecture, implementation, testing, three audit cycles, documentation — one night.
+
 The code is GPL-3.0 and available at `github.com/Xepayac/session-router` on the `rewrite/clean-architecture` branch.
 
-This is a gift. Use it however serves the project best:
+This is a gift, but it is not the end. We are continuing development. Our goal is a working exit node running on the Session network. We will be completing the wire format integration (BT-encoding for full upstream interop), finishing the remaining integration work, and deploying a service node. This is happening regardless of whether Session Foundation engages with us — we have the tokens, the hardware, and the tools.
+
+That said, we'd rather work with you than around you. Use what we've built however serves the project best:
 
 - **Adopt the architecture** — restructure the existing codebase along these layered lines
 - **Use it as a reference** — when the existing code is unclear, our implementation documents what the protocol actually does
 - **Run it as a second implementation** — protocol diversity strengthens the network
-- **Ignore it entirely** — the code is there if you ever need it
+- **Collaborate directly** — we continue building, you review and integrate
 
 ---
 
