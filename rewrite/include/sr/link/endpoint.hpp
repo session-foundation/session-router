@@ -30,8 +30,10 @@ public:
     explicit Endpoint(bool is_relay = false);
     ~Endpoint();
 
-    // Start listening on a port
-    void listen(uint16_t port);
+    // Start listening on a port with Ed25519 identity
+    void listen(uint16_t port,
+                std::span<const std::byte, 32> ed_seed,
+                std::span<const std::byte, 32> ed_pubkey);
 
     // Connect to a relay
     void connect(const sr::contact::RouterID& rid,

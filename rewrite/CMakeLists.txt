@@ -50,8 +50,16 @@ set(LIBQUIC_SRC_DIR "/tmp/oxen-libquic" CACHE PATH "Path to oxen-libquic source 
 add_library(oxen-quic STATIC IMPORTED)
 set_target_properties(oxen-quic PROPERTIES
     IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/src/libquic.a"
-    INTERFACE_INCLUDE_DIRECTORIES "${LIBQUIC_SRC_DIR}/include;${LIBQUIC_BUILD_DIR}/static-deps/include;${LIBQUIC_SRC_DIR}/external/oxen-encoding;${LIBQUIC_SRC_DIR}/external/oxen-logging/include;${LIBQUIC_BUILD_DIR}/external/oxen-logging/generated"
+    INTERFACE_INCLUDE_DIRECTORIES "${LIBQUIC_SRC_DIR}/include;${LIBQUIC_BUILD_DIR}/static-deps/include;${LIBQUIC_SRC_DIR}/external/oxen-encoding;${LIBQUIC_SRC_DIR}/external/oxen-logging/include;${LIBQUIC_BUILD_DIR}/external/oxen-logging/generated;${LIBQUIC_SRC_DIR}/external/oxen-logging/fmt/include;${LIBQUIC_SRC_DIR}/external/oxen-logging/spdlog/include"
 )
+
+# oxen-logging and its deps (required by libquic headers)
+add_library(oxen-logging STATIC IMPORTED)
+set_target_properties(oxen-logging PROPERTIES IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/external/oxen-logging/liboxen-logging.a")
+add_library(spdlog STATIC IMPORTED)
+set_target_properties(spdlog PROPERTIES IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/external/oxen-logging/spdlog/libspdlog.a")
+add_library(fmt STATIC IMPORTED)
+set_target_properties(fmt PROPERTIES IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/external/oxen-logging/fmt/libfmt.a")
 
 # ngtcp2 dependencies
 add_library(ngtcp2 STATIC IMPORTED)
@@ -76,10 +84,8 @@ add_library(sr_link
     src/link/manager.cpp
 )
 target_include_directories(sr_link PUBLIC include)
-target_link_libraries(sr_link PUBLIC sr_session)
-# TODO: link against oxen-quic, ngtcp2, gnutls, libevent when endpoint.cpp is implemented
-# target_link_libraries(sr_link PUBLIC oxen-quic ngtcp2 ngtcp2_crypto
-#     PkgConfig::GNUTLS PkgConfig::LIBEVENT PkgConfig::LIBEVENT_PT)
+target_link_libraries(sr_link PUBLIC sr_session oxen-quic oxen-logging spdlog fmt
+    ngtcp2 ngtcp2_crypto PkgConfig::GNUTLS PkgConfig::LIBEVENT PkgConfig::LIBEVENT_PT)
 
 # Tests
 option(SR_TESTS "Build tests" ON)
