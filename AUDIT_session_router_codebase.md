@@ -1,8 +1,8 @@
-# Session Router Codebase Audit & Proposed Architecture
+# Session Router — Upstream Codebase Audit
 
 **Prepared for:** session-foundation/session-router maintainers
-**Prepared by:** Xepayac (contributor, Xepayac/session-router)
-**Date:** 2026-03-29
+**Prepared by:** Xepayac (github.com/Xepayac)
+**Date:** March 2026
 **Scope:** Full codebase analysis of session-router (formerly Lokinet), proposed clean-room rewrite of core layers
 
 ---

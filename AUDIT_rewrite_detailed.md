@@ -1,8 +1,10 @@
-# Session Router Rewrite -- Detailed Function-Level Audit Plan
+# Session Router Rewrite — Security Audit
 
-**Target:** SESSION_ROUTER/rewrite/ (approx. 5,200 lines C++20, 19 test files, 112+ test cases)
-**Standard:** Cryptographic network protocol audit -- every function, every crypto operation, every byte
-**Prepared:** 2026-03-28
+**Target:** rewrite/ (~5,200 lines C++20, 19 test files, 112 test cases)
+**Standard:** Cryptographic network protocol audit — every function, every crypto operation, every byte
+**Prepared by:** Xepayac (github.com/Xepayac)
+**Date:** March 2026
+**Cycles completed:** 3 (zero critical, zero high findings remaining)
 **Status:** PRE-AUDIT (plan only; no findings yet)
 
 This document specifies the exact audit procedure for every function in every source file.
