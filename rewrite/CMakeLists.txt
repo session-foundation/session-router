@@ -149,4 +149,19 @@ if(SR_TESTS)
     )
     target_link_libraries(test_session PRIVATE sr_session Catch2::Catch2WithMain)
     add_test(NAME session COMMAND test_session)
+
+    add_executable(test_link
+        test/test_manager.cpp
+    )
+    target_link_libraries(test_link PRIVATE sr_link Catch2::Catch2WithMain)
+    add_test(NAME link COMMAND test_link)
+
+    add_executable(test_node
+        test/test_config.cpp
+        test/test_tun.cpp
+        test/test_dns.cpp
+        test/test_events.cpp
+    )
+    target_link_libraries(test_node PRIVATE sr_node Catch2::Catch2WithMain)
+    add_test(NAME node COMMAND test_node)
 endif()
