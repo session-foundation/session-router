@@ -102,6 +102,13 @@ add_library(sr_node
 target_include_directories(sr_node PUBLIC include)
 target_link_libraries(sr_node PUBLIC sr_link)
 
+# Exit library (v1.1 feature)
+add_library(sr_exit
+    src/exit/exit_handler.cpp
+)
+target_include_directories(sr_exit PUBLIC include)
+target_link_libraries(sr_exit PUBLIC sr_node)
+
 # Main executable
 add_executable(session-router src/main.cpp)
 target_link_libraries(session-router PRIVATE sr_node)
@@ -163,6 +170,12 @@ if(SR_TESTS)
     )
     target_link_libraries(test_bt PRIVATE sr_contact Catch2::Catch2WithMain)
     add_test(NAME bt COMMAND test_bt)
+
+    add_executable(test_exit
+        test/test_exit.cpp
+    )
+    target_link_libraries(test_exit PRIVATE sr_exit Catch2::Catch2WithMain)
+    add_test(NAME exit COMMAND test_exit)
 
     add_executable(test_node
         test/test_config.cpp
