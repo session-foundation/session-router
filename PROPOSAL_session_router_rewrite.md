@@ -153,7 +153,7 @@ What I bring is not code. I bring the ability to understand complex systems comp
 
 ---
 
-**Contact:** github.com/Xepayac
+**Contact:** Xepayac@gmail.com | github.com/Xepayac
 **Code:** github.com/Xepayac/session-router (branch: rewrite/clean-architecture)
 **Audit:** AUDIT_rewrite_detailed.md (1,389 lines, function-by-function)
 
