@@ -32,6 +32,8 @@ add_library(sr_contact
     src/contact/nodedb.cpp
 )
 target_include_directories(sr_contact PUBLIC include)
+target_include_directories(sr_contact PUBLIC
+    ${LIBQUIC_SRC_DIR}/external/oxen-encoding)
 target_link_libraries(sr_contact PUBLIC sr_crypto)
 
 # Path library (Layer 2)
@@ -155,6 +157,12 @@ if(SR_TESTS)
     )
     target_link_libraries(test_link PRIVATE sr_link Catch2::Catch2WithMain)
     add_test(NAME link COMMAND test_link)
+
+    add_executable(test_bt
+        test/test_bt.cpp
+    )
+    target_link_libraries(test_bt PRIVATE sr_contact Catch2::Catch2WithMain)
+    add_test(NAME bt COMMAND test_bt)
 
     add_executable(test_node
         test/test_config.cpp
