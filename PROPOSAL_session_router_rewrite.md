@@ -114,7 +114,7 @@ Everything described above was accomplished in a single overnight session. Analy
 
 The code is GPL-3.0 and available at `github.com/Xepayac/session-router` on the `rewrite/clean-architecture` branch.
 
-This is a gift, but it is not the end. We are continuing development. Our goal is a working exit node running on the Session network. We will be completing the wire format integration (BT-encoding for full upstream interop), finishing the remaining integration work, and deploying a service node. We'd welcome your involvement in shaping the direction. Use what we've built however serves the project best:
+This is a gift, but it is not the end. We are continuing development. Our goal is a working exit node running on the Session network. We will be completing the wire format integration (BT-encoding for full upstream interop), finishing the remaining integration work, and deploying a service node. Use what we've built however serves the project best:
 
 - **Adopt the architecture** — restructure the existing codebase along these layered lines
 - **Use it as a reference** — when the existing code is unclear, our implementation documents what the protocol actually does
@@ -123,7 +123,7 @@ This is a gift, but it is not the end. We are continuing development. Our goal i
 
 ---
 
-## What We Need From You
+## What We Ask From You
 
 We'd like to keep contributing, and we'd rather get it right than get it fast. Specifically, we'd appreciate your guidance on:
 
@@ -135,7 +135,9 @@ We'd like to keep contributing, and we'd rather get it right than get it fast. S
 
 4. **Service node registration.** What's the current process for registering a relay/exit node? Staking requirements, oxend integration, any changes since the Oxen transition?
 
-5. **General review.** If you have time to look at the code, we want to hear what we got wrong. A 10-minute review from someone who knows the protocol is worth more than another week of our analysis.
+5. **Test network access.** If there is a testnet or staging environment where we can validate interoperability without affecting the live network, access would let us test safely before mainnet.
+
+6. **General review.** If you have time to look at the code, we want to hear what we got wrong. A 10-minute review from someone who knows the protocol is worth more than another week of our analysis.
 
 We are not asking you to do our work for us. We are asking for the information that only you have, so that what we build actually works on your network.
 
@@ -155,4 +157,4 @@ What I bring is not code. I bring the ability to understand complex systems comp
 **Code:** github.com/Xepayac/session-router (branch: rewrite/clean-architecture)
 **Audit:** AUDIT_rewrite_detailed.md (1,389 lines, function-by-function)
 
-*All code written by Claude Code (Anthropic Opus). All architecture and decisions by Xepayac.*
+*All code and this PROPOSAL is written by Claude Code (Anthropic Opus). All architecture and decisions by Xepayac.*
