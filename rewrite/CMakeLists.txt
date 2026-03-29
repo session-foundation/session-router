@@ -43,12 +43,43 @@ add_library(sr_path
 target_include_directories(sr_path PUBLIC include)
 target_link_libraries(sr_path PUBLIC sr_contact)
 
+# oxen-libquic (pre-built)
+set(LIBQUIC_BUILD_DIR "/tmp/oxen-libquic/build" CACHE PATH "Path to oxen-libquic build directory")
+set(LIBQUIC_SRC_DIR "/tmp/oxen-libquic" CACHE PATH "Path to oxen-libquic source directory")
+
+add_library(oxen-quic STATIC IMPORTED)
+set_target_properties(oxen-quic PROPERTIES
+    IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/src/libquic.a"
+    INTERFACE_INCLUDE_DIRECTORIES "${LIBQUIC_SRC_DIR}/include;${LIBQUIC_BUILD_DIR}/static-deps/include;${LIBQUIC_SRC_DIR}/external/oxen-encoding;${LIBQUIC_SRC_DIR}/external/oxen-logging/include;${LIBQUIC_BUILD_DIR}/external/oxen-logging/generated"
+)
+
+# ngtcp2 dependencies
+add_library(ngtcp2 STATIC IMPORTED)
+set_target_properties(ngtcp2 PROPERTIES IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/static-deps/lib/libngtcp2.a")
+add_library(ngtcp2_crypto STATIC IMPORTED)
+set_target_properties(ngtcp2_crypto PROPERTIES IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/static-deps/lib/libngtcp2_crypto_gnutls.a")
+
+pkg_check_modules(GNUTLS REQUIRED IMPORTED_TARGET gnutls)
+pkg_check_modules(LIBEVENT REQUIRED IMPORTED_TARGET libevent_core)
+pkg_check_modules(LIBEVENT_PT REQUIRED IMPORTED_TARGET libevent_pthreads)
+
 # Session library (Layer 3)
 add_library(sr_session
     src/session/session.cpp
 )
 target_include_directories(sr_session PUBLIC include)
 target_link_libraries(sr_session PUBLIC sr_path)
+
+# Link library (Layer 4)
+add_library(sr_link
+    src/link/endpoint.cpp
+    src/link/manager.cpp
+)
+target_include_directories(sr_link PUBLIC include)
+target_link_libraries(sr_link PUBLIC sr_session)
+# TODO: link against oxen-quic, ngtcp2, gnutls, libevent when endpoint.cpp is implemented
+# target_link_libraries(sr_link PUBLIC oxen-quic ngtcp2 ngtcp2_crypto
+#     PkgConfig::GNUTLS PkgConfig::LIBEVENT PkgConfig::LIBEVENT_PT)
 
 # Tests
 option(SR_TESTS "Build tests" ON)
