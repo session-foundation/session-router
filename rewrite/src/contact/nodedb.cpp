@@ -1,5 +1,7 @@
 #include <sr/contact/nodedb.hpp>
 
+#include <sodium.h>
+
 #include <algorithm>
 #include <cstring>
 
@@ -70,8 +72,8 @@ namespace sr::contact
             }
             else
             {
-                std::uniform_int_distribution<size_t> dist(0, i);
-                size_t j = dist(_rng);
+                // CSPRNG for anonymity-critical hop selection
+                size_t j = randombytes_uniform(static_cast<uint32_t>(i + 1));
                 if (j < count)
                     result[j] = *eligible[i];
             }

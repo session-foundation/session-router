@@ -126,6 +126,8 @@ namespace sr::crypto
 
         sodium_memzero(nonce_hash, sizeof(nonce_hash));
         sodium_memzero(nonce_scalar, sizeof(nonce_scalar));
+        sodium_memzero(tmp, sizeof(tmp));  // contains private key derivative
+        sodium_memzero(hram_scalar, sizeof(hram_scalar));
 
         return sig;
     }

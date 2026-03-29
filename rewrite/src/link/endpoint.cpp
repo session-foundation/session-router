@@ -218,9 +218,13 @@ namespace sr::link
     {
         if (_impl && _impl->ep)
         {
+            // Clear connections first (under lock) to prevent callbacks from accessing stale state
+            {
+                std::lock_guard lock{_impl->mtx};
+                _impl->connections.clear();
+            }
+            // Close connections and endpoint (may trigger callbacks, but connections map is empty)
             _impl->ep->close_conns();
-            std::lock_guard lock{_impl->mtx};
-            _impl->connections.clear();
             _impl->ep.reset();
         }
     }

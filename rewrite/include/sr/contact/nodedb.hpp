@@ -7,7 +7,6 @@
 #include <chrono>
 #include <mutex>
 #include <optional>
-#include <random>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -58,7 +57,6 @@ namespace sr::contact
       private:
         mutable std::mutex _mtx;
         std::unordered_map<RouterID, RelayContact> _rcs;
-        mutable std::mt19937 _rng{std::random_device{}()};
 
         static size_t bucket_index(const RouterID& rid);
     };

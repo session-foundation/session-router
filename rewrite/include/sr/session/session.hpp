@@ -33,17 +33,17 @@ namespace sr::session
     {
       public:
         Session() = default;
-        Session(const Session& o)
-            : _keys{o._keys}, _tag{o._tag}, _established{o._established}, _nonce_counter{o._nonce_counter.load()} {}
-        Session& operator=(const Session& o) {
-            _keys = o._keys; _tag = o._tag; _established = o._established;
-            _nonce_counter = o._nonce_counter.load(); return *this;
-        }
+
+        // Sessions are MOVE-ONLY. Copying would duplicate the nonce counter,
+        // causing nonce reuse which breaks AEAD security.
+        Session(const Session&) = delete;
+        Session& operator=(const Session&) = delete;
         Session(Session&& o) noexcept
-            : _keys{o._keys}, _tag{o._tag}, _established{o._established}, _nonce_counter{o._nonce_counter.load()} {}
+            : _keys{o._keys}, _tag{o._tag}, _established{o._established},
+              _nonce_counter{o._nonce_counter.exchange(0)} {}
         Session& operator=(Session&& o) noexcept {
             _keys = o._keys; _tag = o._tag; _established = o._established;
-            _nonce_counter = o._nonce_counter.load(); return *this;
+            _nonce_counter = o._nonce_counter.exchange(0); return *this;
         }
 
         // Encrypt a data message with session keys.
