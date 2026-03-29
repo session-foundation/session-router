@@ -68,3 +68,11 @@ regdbhelper.dll
 xcuserdata/
 
 scc.py
+rewrite/build/
+
+# Internal analysis — not for contribution
+PLAN_*.md
+AUDIT_rewrite_plan.md
+*.trug.json
+aaa.trug.json
+folder.trug.json

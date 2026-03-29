@@ -1826,7 +1826,7 @@ namespace srouter::session
             log::debug(
                 logcat,
                 "Received session accept message for established session, likely a path switch failed because the "
-                "remote restarted, but it accepted our fallack session init.");
+                "remote restarted, but it accepted our fallback session init.");
 
         // reset these so that if this parsing fails we trigger a new session init:
         _is_established = false;

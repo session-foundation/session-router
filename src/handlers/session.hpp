@@ -298,7 +298,7 @@ namespace srouter
             // Initiates a session to the given remote client or snode address.  Calls
             // `on_attempted` when the connection is either established (immediately, if a session
             // to the target is already established) or when the connection attempt times out (the
-            // caller can check `session.is_established()` to figure out which one occured).
+            // caller can check `session.is_established()` to figure out which one occurred).
             //
             // The timeout, if omitted/nullopt, defaults to the [paths]build-timeout config option.
             //

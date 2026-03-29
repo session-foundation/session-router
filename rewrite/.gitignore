@@ -1,0 +1,17 @@
+build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+*.a
+*.o
+test_crypto
+test_contact
+test_path
+test_session
+test_link
+test_node
+test_bt
+test_exit
+session-router

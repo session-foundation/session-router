@@ -433,7 +433,7 @@ namespace srouter
             // void stop_session() override;
 
             // Calls the given callback with the session when it becomes established, or after
-            // timing out.  (The callback can check which case occured via `.is_established()` on
+            // timing out.  (The callback can check which case occurred via `.is_established()` on
             // the argument).  If the session is already established when this is called then it is
             // fired immediately (before returning).
             //

@@ -844,7 +844,7 @@ namespace srouter::handlers
             }
             catch (const std::exception& e)
             {
-                log::warning(logcat, "An error occured processing fetched rc response: {}", e.what());
+                log::warning(logcat, "An error occurred processing fetched rc response: {}", e.what());
             }
 
             if (rc)
