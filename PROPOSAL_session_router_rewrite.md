@@ -127,7 +127,7 @@ That said, we'd rather work with you than around you. Use what we've built howev
 
 ## What We Need From You
 
-We're continuing this work regardless, but we'd rather get it right than get it fast. Specifically, we'd appreciate your guidance on:
+We'd like to keep contributing, and we'd rather get it right than get it fast. Specifically, we'd appreciate your guidance on:
 
 1. **Wire format verification.** Our session init/accept and path build payloads currently use raw binary serialization. Upstream uses BT-encoded dicts. We need to know the exact field ordering and encoding for each message type to achieve interop. A test vector from your side — a known input with the expected serialized output — would save us weeks of reverse engineering.
 
