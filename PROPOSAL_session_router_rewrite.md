@@ -1,8 +1,20 @@
 # Proposal: Session Router — Clean Architecture Rewrite
 
-**From:** Xepayac (contributor, github.com/Xepayac)
+**From:** Xepayac (github.com/Xepayac)
 **To:** Session Foundation / session-router maintainers
 **Date:** March 2026
+
+---
+
+## Who We Are
+
+I'm Xepayac. I don't write code. I understand systems and communication.
+
+I run a small LLC focused on graph-based system analysis — mapping how complex software actually works, where the problems are, and what the solution looks like. I use a proprietary system for this work that I've been developing for several years.
+
+Every line of code in this proposal was written by Claude Code (Anthropic's AI coding tool, Opus model). I directed the analysis, made the architectural decisions, chose the design tradeoffs, and reviewed the results. Claude wrote the C++, the tests, and the audit documentation. I'm being completely transparent about this because the work speaks for itself, and because I believe AI-assisted development done with discipline and rigor produces results that should be judged on merit, not on who typed the characters.
+
+This is a gift. The code is GPL-3.0 and freely available. But I'm also a business. If Session Foundation finds value in what we've done and wants continued contribution — deeper protocol work, ongoing maintenance, security hardening, additional features — I'm available for paid engagement. I hold Session tokens and my interests are aligned with the network's success.
 
 ---
 
@@ -10,7 +22,7 @@
 
 We came to session-router as contributors. We wanted to help.
 
-Before writing a single line of code, we used a proprietary graph-based analysis system to map the entire codebase — every module, every dependency, every runtime flow, every message on the wire. We didn't start with opinions. We started with understanding.
+Before writing a single line of code, we used our proprietary graph-based analysis system to map the entire codebase — every module, every dependency, every runtime flow, every message on the wire. We didn't start with opinions. We started with understanding.
 
 What we found was a project with excellent fundamentals — solid cryptography (libsodium exclusively), a clever Layer 3 onion routing design over QUIC, and a protocol that is architecturally superior to Tor for VPN use cases. The people who designed this system knew what they were doing.
 
@@ -49,6 +61,24 @@ The rewrite uses the same cryptographic primitives (libsodium), the same QUIC tr
 
 ---
 
+## How It Was Done
+
+The entire process — from first reading the codebase to passing the final security audit — took one session. Here is what happened:
+
+1. **Analysis.** We mapped the codebase into a 91-node, 366-edge graph covering architecture, runtime flows, wire formats, state management, failure modes, hidden complexity, constraints, and design decisions. This gave us complete understanding of a 37,000-line codebase without getting lost.
+
+2. **Architecture.** We designed a 6-layer architecture with zero circular dependencies, strict layering rules, and dependency injection. Each layer was validated against the graph before writing code.
+
+3. **Implementation.** Claude Code built each layer bottom-up: crypto first (pure functions, full tests), then contact, path, session, link, and node. Each layer was tested before starting the next.
+
+4. **Audit.** Three audit cycles: 1,389 lines of function-by-function security analysis covering every crypto call, every wire format byte, and every thread boundary. 5 CRITICAL and 5 HIGH findings identified, fixed, and verified. One new HIGH finding caught in cycle 2, fixed in cycle 3. Final state: zero critical, zero high.
+
+5. **Polish.** clang-format with upstream style, professional code review, README, complete documentation.
+
+The analysis system is what made this possible. Without it, understanding 37,000 lines of cryptographic networking code well enough to rewrite it correctly would take months. With it, we mapped every dragon and every constraint before writing a line of code.
+
+---
+
 ## Architecture
 
 ```
@@ -74,33 +104,35 @@ We conducted a three-cycle security audit of our own code:
 
 The audit covered every function in every source file — cryptographic parameter ordering, nonce reuse prevention, key material zeroing, shell injection, thread safety, checksum correctness, and wire format integrity.
 
+The full audit document is 1,389 lines and available in the repository.
+
 ---
 
 ## What We're Offering
 
 The code is GPL-3.0 and available at `github.com/Xepayac/session-router` on the `rewrite/clean-architecture` branch.
 
-We are not asking you to adopt our code wholesale. We are showing you that the protocol you designed can be implemented in 5,000 lines instead of 37,000, with zero circular dependencies, full test coverage, and a clean security audit.
-
-Use it however serves the project best:
+This is a gift. Use it however serves the project best:
 
 - **Adopt the architecture** — restructure the existing codebase along these layered lines
 - **Use it as a reference** — when the existing code is unclear, our implementation documents what the protocol actually does
 - **Run it as a second implementation** — protocol diversity strengthens the network
 - **Ignore it entirely** — the code is there if you ever need it
 
-We are available to contribute further. We have the analysis, the understanding, and the tools to continue improving session-router.
-
 ---
 
 ## What We Want
 
-A working, secure, anonymous network. That's it.
+Honestly: we want the network to work, and we want to get paid for helping make it work.
 
-We hold Session tokens. The network's success is our success. Everything we built is GPL-3.0 and freely available.
+We hold Session tokens. The network's success is directly our success. This contribution is free because demonstrating capability is how you earn trust. But if Session Foundation wants continued work — wire format completion, upstream integration, exit mode hardening, ongoing maintenance — we're available for a paid engagement.
+
+What I bring is not code. I bring the ability to understand complex systems completely, direct AI tools precisely, and ship production-quality results. The code proves this.
 
 ---
 
 **Contact:** github.com/Xepayac
 **Code:** github.com/Xepayac/session-router (branch: rewrite/clean-architecture)
 **Audit:** AUDIT_rewrite_detailed.md (1,389 lines, function-by-function)
+
+*All code written by Claude Code (Anthropic Opus). All architecture and decisions by Xepayac.*
