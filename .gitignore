@@ -68,3 +68,4 @@ regdbhelper.dll
 xcuserdata/
 
 scc.py
+rewrite/build/
