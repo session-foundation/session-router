@@ -125,6 +125,24 @@ That said, we'd rather work with you than around you. Use what we've built howev
 
 ---
 
+## What We Need From You
+
+We're continuing this work regardless, but we'd rather get it right than get it fast. Specifically, we'd appreciate your guidance on:
+
+1. **Wire format verification.** Our session init/accept and path build payloads currently use raw binary serialization. Upstream uses BT-encoded dicts. We need to know the exact field ordering and encoding for each message type to achieve interop. A test vector from your side — a known input with the expected serialized output — would save us weeks of reverse engineering.
+
+2. **Session key derivation.** Our `session_secret()` uses a single BLAKE2b-512 hash. We want to confirm this matches your implementation exactly. The domain string, the input ordering, the hash structure — one wrong byte and sessions silently fail.
+
+3. **Bootstrap file format.** We need the format of the signed bootstrap RC files to connect to the live network.
+
+4. **Service node registration.** What's the current process for registering a relay/exit node? Staking requirements, oxend integration, any changes since the Oxen transition?
+
+5. **General review.** If you have time to look at the code, we want to hear what we got wrong. A 10-minute review from someone who knows the protocol is worth more than another week of our analysis.
+
+We are not asking you to do our work for us. We are asking for the information that only you have, so that what we build actually works on your network.
+
+---
+
 ## What We Want
 
 Honestly: we want the network to work, and we want to get paid for helping make it work.
