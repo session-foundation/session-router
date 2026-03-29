@@ -6,7 +6,7 @@ SessionRouter est l'implementation de référence du LLARP (Low Latency Anonymou
 
 Vous pouvez en savoir plus sur le haut niveau de conception du LLARP [ici](docs/)
 
-[![Build Status](https://ci.oxen.rocks/api/badges/oxen-io/session_router/status.svg?ref=refs/heads/dev)](https://ci.oxen.rocks/oxen-io/session_router)
+[![Build Status](https://ci.oxen.rocks/api/badges/session-foundation/session_router/status.svg?ref=refs/heads/dev)](https://ci.oxen.rocks/session-foundation/session_router)
 
 ## Installer
 
@@ -59,7 +59,7 @@ Vous pouvez installer les paquets debian en utilisant :
 Si vous voulez construire session_router à partir des sources :
 
     $ sudo apt install build-essential cmake git libcap-dev pkg-config automake libtool libuv1-dev libsodium-dev libzmq3-dev libcurl4-openssl-dev libevent-dev nettle-dev libunbound-dev libsqlite3-dev libssl-dev nlohmann-json3-dev
-    $ git clone --recursive https://github.com/oxen-io/session_router
+    $ git clone --recursive https://github.com/session-foundation/session_router
     $ cd session_router
     $ mkdir build
     $ cd build
@@ -69,7 +69,7 @@ Si vous voulez construire session_router à partir des sources :
 
 #### Arch Linux <span id="mom-cancel-my-meetings-arch-linux-broke-again" />
 
-En raison de [circonstances indépendantes de notre volonté](https://github.com/oxen-io/session_router/discussions/1823) un `PKGBUILD` fonctionnel peut être trouvé [ici](https://raw.githubusercontent.com/oxen-io/session_router/makepkg/contrib/archlinux/PKGBUILD).
+En raison de [circonstances indépendantes de notre volonté](https://github.com/session-foundation/session_router/discussions/1823) un `PKGBUILD` fonctionnel peut être trouvé [ici](https://raw.githubusercontent.com/session-foundation/session_router/makepkg/contrib/archlinux/PKGBUILD).
 
 #### Compilation croisée pour Linux <span id="linux-cross" />
 
@@ -98,10 +98,10 @@ La compilation du code source de SessionRouter par les utilisateurs finaux n'est
 
 ### Windows <span id="windows-install" />
 
-Vous pouvez obtenir la dernière version stable de Windows à l'adresse https://session_router.org/ ou consulter la [page des versions sur github] (https://github.com/oxen-io/session_router/releases).
+Vous pouvez obtenir la dernière version stable de Windows à l'adresse https://session_router.org/ ou consulter la [page des versions sur github] (https://github.com/session-foundation/session_router/releases).
 
 
-les compilation automatique de nuit pour les courageux ou les impatients peuvent être trouvées à partir de notre pipeline CI [ici](https://oxen.rocks/oxen-io/session_router/)
+les compilation automatique de nuit pour les courageux ou les impatients peuvent être trouvées à partir de notre pipeline CI [ici](https://oxen.rocks/session-foundation/session_router/)
 
 #### Construire les paquets sur Windows <span id="win32-cross" />
 
@@ -120,7 +120,7 @@ configuration:
 
 building:
 
-    $ git clone --recursive https://github.com/oxen-io/session_router
+    $ git clone --recursive https://github.com/session-foundation/session_router
     $ cd session_router
     $ ./contrib/windows.sh
 
@@ -131,7 +131,7 @@ Currently has no VPN Platform code, see #1513
 construction:
 
     $ pkg install cmake git pkgconf
-    $ git clone --recursive https://github.com/oxen-io/session_router
+    $ git clone --recursive https://github.com/session-foundation/session_router
     $ cd session_router
     $ mkdir build
     $ cd build
@@ -146,10 +146,10 @@ installation (root):
 
 Nous avons un APK Android pour le VPN session_router via l'API VPN android. 
 
-A venir sur F-Droid quand cela arrivera. [[issue]](https://github.com/oxen-io/session_router-flutter-app/issues/8)
+A venir sur F-Droid quand cela arrivera. [[issue]](https://github.com/session-foundation/session_router-flutter-app/issues/8)
 
-* [code source](https://github.com/oxen-io/session_router-flutter-app)
-* [CI builds](https://oxen.rocks/oxen-io/session_router/)
+* [code source](https://github.com/session-foundation/session_router-flutter-app)
+* [CI builds](https://oxen.rocks/session-foundation/session_router/)
 
 ## Usage
 

@@ -8,13 +8,13 @@ SessionRouter - реализация LLARP (протокол анонимной 
 
 Почитать спецификацию протокола LLARP [здесь](docs/proto_v0.txt)
 
-Почитать документацию о том, как начать работу [здесь](https://oxen-io.github.io/loki-docs/SessionRouter/SessionRouterOverview/)
+Почитать документацию о том, как начать работу [здесь](https://session-foundation.github.io/loki-docs/SessionRouter/SessionRouterOverview/)
 
-[![Build Status](https://drone.session_router.dev/api/badges/oxen-io/session_router/status.svg?ref=refs/heads/master)](https://drone.session_router.dev/oxen-io/session_router)
+[![Build Status](https://drone.session_router.dev/api/badges/session-foundation/session_router/status.svg?ref=refs/heads/master)](https://drone.session_router.dev/session-foundation/session_router)
 
 ## Использование
 
-О том как начать работу см. [Документацию](https://oxen-io.github.io/loki-docs/SessionRouter/SessionRouterOverview/)
+О том как начать работу см. [Документацию](https://session-foundation.github.io/loki-docs/SessionRouter/SessionRouterOverview/)
 
 Также прочтите [Public Testing Guide](https://lokidocs.com/SessionRouter/Guides/PublicTestingGuide/#1-session_router-installation) для установки и другой полезной информации.
 
@@ -72,7 +72,7 @@ SessionRouter - реализация LLARP (протокол анонимной 
 сборка:
 
     $ sudo apt install build-essential cmake git libcap-dev curl libuv1-dev libsodium-dev pkg-config
-    $ git clone --recursive https://github.com/oxen-io/session_router
+    $ git clone --recursive https://github.com/session-foundation/session_router
     $ cd session_router
     $ mkdir build
     $ cd build
@@ -88,7 +88,7 @@ SessionRouter - реализация LLARP (протокол анонимной 
 сборка:
     убедитесь, что у вас установлены инструменты командной строки cmake, libuv и xcode
 
-    $ git clone --recursive https://github.com/oxen-io/session_router
+    $ git clone --recursive https://github.com/session-foundation/session_router
     $ cd session_router
     $ mkdir build
     $ cd build
@@ -114,7 +114,7 @@ SessionRouter - реализация LLARP (протокол анонимной 
 
 сборка:
 
-    $ git clone --recursive https://github.com/oxen-io/session_router
+    $ git clone --recursive https://github.com/session-foundation/session_router
     $ cd session_router
     $ mkdir build-windows
     $ cd build-windows
@@ -134,7 +134,7 @@ SessionRouter - реализация LLARP (протокол анонимной 
     $ sudo pkg install build-essential gcc8 wget tuntap cmake (optional: ninja ccache - from omnios extra) (OmniOS CE)
     $ sudo pkg install base-developer-utilities developer-gnu developer-studio-utilities gcc-7 wget cmake (Oracle Solaris, see note)
     $ sudo pkg install build-essential wget gcc-8 documentation/tuntap header-tun tun (optional: ninja ccache) (all other SunOS)
-    $ git clone --recursive https://github.com/oxen-io/session_router
+    $ git clone --recursive https://github.com/session-foundation/session_router
     $ cd session_router
     $ mkdir build
     $ cd build
@@ -150,7 +150,7 @@ SessionRouter - реализация LLARP (протокол анонимной 
 сборка:
 
     $ pkg install cmake git curl libuv libsodium pkgconf libunbound
-    $ git clone --recursive https://github.com/oxen-io/session_router
+    $ git clone --recursive https://github.com/session-foundation/session_router
     $ cd session_router
     $ mkdir build
     $ cmake -DCMAKE_BUILD_TYPE=Release ..

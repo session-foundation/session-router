@@ -60,14 +60,11 @@ Build requirements:
 
 * Git
 * CMake
-* C++ 17 capable C++ compiler
-* libuv >= 1.27.0
+* C++ 20 capable C++ compiler (gcc 12+ or clang 15+)
 * libsodium >= 1.0.18
-* libssl (for session-router-bootstrap)
-* libcurl (for session-router-bootstrap)
+* libevent >= 2.1
+* libzstd >= 1.3
 * libunbound
-* libzmq
-* cppzmq
 
 ### Linux Compile
 
