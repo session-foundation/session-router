@@ -265,10 +265,13 @@ namespace sr::node
         // Generate new keys
         _identity = Ed25519KeyPair::generate();
 
-        // Save
+        // Save with restricted permissions (secret key must not be world-readable)
         std::filesystem::create_directories(_config.data_dir);
         std::ofstream f{key_path, std::ios::binary};
         f.write(reinterpret_cast<const char*>(_identity.sk.data()), 64);
+        f.close();
+        std::filesystem::permissions(
+            key_path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
     }
 
 }  // namespace sr::node

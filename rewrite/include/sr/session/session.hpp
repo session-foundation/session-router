@@ -7,6 +7,7 @@
 #include <sr/crypto/types.hpp>
 #include <sr/path/path.hpp>
 
+#include <atomic>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -32,6 +33,18 @@ namespace sr::session
     {
       public:
         Session() = default;
+        Session(const Session& o)
+            : _keys{o._keys}, _tag{o._tag}, _established{o._established}, _nonce_counter{o._nonce_counter.load()} {}
+        Session& operator=(const Session& o) {
+            _keys = o._keys; _tag = o._tag; _established = o._established;
+            _nonce_counter = o._nonce_counter.load(); return *this;
+        }
+        Session(Session&& o) noexcept
+            : _keys{o._keys}, _tag{o._tag}, _established{o._established}, _nonce_counter{o._nonce_counter.load()} {}
+        Session& operator=(Session&& o) noexcept {
+            _keys = o._keys; _tag = o._tag; _established = o._established;
+            _nonce_counter = o._nonce_counter.load(); return *this;
+        }
 
         // Encrypt a data message with session keys.
         std::vector<std::byte> encrypt(std::span<const std::byte> plaintext, TrafficType type = TrafficType::IP) const;
@@ -50,7 +63,7 @@ namespace sr::session
         sr::crypto::SessionKeys _keys;
         SessionTag _tag{};
         bool _established = false;
-        mutable uint64_t _nonce_counter = 0;
+        mutable std::atomic<uint64_t> _nonce_counter{0};
     };
 
     // Session handshake messages.

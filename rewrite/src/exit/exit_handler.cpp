@@ -95,6 +95,8 @@ namespace sr::exit
             std::memcpy(&entry.internal_ip, packet.data() + 12, 4);
             _nat_table[_next_port] = entry;
             key = _next_port++;
+            if (_next_port > 65534)
+                _next_port = 10000;
         }
 
         // Rewrite packet (copy + modify source port)

@@ -6,6 +6,7 @@
 #include <functional>
 #include <string>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 namespace sr::node

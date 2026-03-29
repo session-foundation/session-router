@@ -9,28 +9,29 @@ namespace sr::path
 
     using namespace sr::crypto;
 
+    static SymmetricKey key_from_shared(const SharedSecret& ss)
+    {
+        SymmetricKey k;
+        std::memcpy(k.data(), ss.data(), 32);
+        return k;
+    }
+
+    static constexpr auto MAX_FUZZ_SECONDS = std::chrono::seconds(180);
+
     Path::Path(std::vector<Hop> hops, std::chrono::steady_clock::time_point created)
         : _hops{std::move(hops)}, _created{created}
     {
-        // Random lifetime fuzz
         std::random_device rd;
         std::mt19937 rng{rd()};
-        std::uniform_int_distribution<int> dist(0, MAX_FUZZ.count());
-        _lifetime_fuzz = std::chrono::seconds(dist(rng) * 60);
+        std::uniform_int_distribution<int> dist(0, static_cast<int>(MAX_FUZZ_SECONDS.count()));
+        _lifetime_fuzz = std::chrono::seconds(dist(rng));
     }
 
     std::vector<std::byte> Path::encrypt_data(std::span<const std::byte> plaintext, const Nonce& nonce) const
     {
-        // Start with plaintext copy
         std::vector<std::byte> buf(plaintext.begin(), plaintext.end());
 
-        // Apply onion layers in REVERSE order (pivot first, edge last).
-        // The relay peels in FORWARD order (edge first), so the nonce
-        // must be computed to match forward peeling:
-        //   relay 0 decrypts with nonce, XOR with hop[0].xor_nonce
-        //   relay 1 decrypts with nonce', XOR with hop[1].xor_nonce
-        //   relay N decrypts with nonce''
-        // For encryption (reverse), we pre-compute each hop's nonce:
+        // Pre-compute each hop's nonce to match forward peeling order
         std::vector<Nonce> hop_nonces(_hops.size());
         hop_nonces[0] = nonce;
         for (size_t i = 1; i < _hops.size(); ++i)
@@ -43,7 +44,7 @@ namespace sr::path
         // Encrypt in reverse: pivot layer first, edge layer last
         for (int i = static_cast<int>(_hops.size()) - 1; i >= 0; --i)
         {
-            xchacha20_inplace(buf, reinterpret_cast<const SymmetricKey&>(_hops[i].shared_secret), hop_nonces[i]);
+            xchacha20_inplace(buf, key_from_shared(_hops[i].shared_secret), hop_nonces[i]);
         }
 
         return buf;
@@ -51,12 +52,10 @@ namespace sr::path
 
     std::optional<std::vector<std::byte>> Path::decrypt_data(std::span<std::byte> data, Nonce& nonce) const
     {
-        // Peel onion layers in FORWARD order (edge first, pivot last).
         for (size_t i = 0; i < _hops.size(); ++i)
         {
-            xchacha20_inplace(data, reinterpret_cast<const SymmetricKey&>(_hops[i].shared_secret), nonce);
+            xchacha20_inplace(data, key_from_shared(_hops[i].shared_secret), nonce);
 
-            // XOR nonce for next layer
             if (i + 1 < _hops.size())
             {
                 for (size_t j = 0; j < nonce.size(); ++j)

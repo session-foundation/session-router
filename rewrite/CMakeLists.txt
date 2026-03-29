@@ -8,6 +8,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Strict warnings
 add_compile_options(-Wall -Wextra -Werror -Wpedantic)
 
+# ML-KEM placeholder mode (until real implementation linked)
+option(SR_MLKEM_PLACEHOLDER "Allow ML-KEM placeholder implementation" ON)
+if(SR_MLKEM_PLACEHOLDER)
+    add_compile_definitions(SR_MLKEM_PLACEHOLDER_OK)
+endif()
+
 # Dependencies
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium>=1.0.18)
@@ -24,6 +30,10 @@ add_library(sr_crypto
 )
 target_include_directories(sr_crypto PUBLIC include)
 target_link_libraries(sr_crypto PUBLIC PkgConfig::SODIUM)
+
+# oxen-libquic paths (needed for oxen-encoding headers in Layer 1)
+set(LIBQUIC_BUILD_DIR "/tmp/oxen-libquic/build" CACHE PATH "Path to oxen-libquic build directory")
+set(LIBQUIC_SRC_DIR "/tmp/oxen-libquic" CACHE PATH "Path to oxen-libquic source directory")
 
 # Contact library (Layer 1)
 add_library(sr_contact
@@ -46,9 +56,6 @@ target_include_directories(sr_path PUBLIC include)
 target_link_libraries(sr_path PUBLIC sr_contact)
 
 # oxen-libquic (pre-built)
-set(LIBQUIC_BUILD_DIR "/tmp/oxen-libquic/build" CACHE PATH "Path to oxen-libquic build directory")
-set(LIBQUIC_SRC_DIR "/tmp/oxen-libquic" CACHE PATH "Path to oxen-libquic source directory")
-
 add_library(oxen-quic STATIC IMPORTED)
 set_target_properties(oxen-quic PROPERTIES
     IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/src/libquic.a"

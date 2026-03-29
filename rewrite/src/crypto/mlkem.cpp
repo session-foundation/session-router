@@ -12,6 +12,10 @@ namespace sr::crypto
 
     MLKEMKeyPair MLKEMKeyPair::generate()
     {
+#ifndef SR_MLKEM_PLACEHOLDER_OK
+        throw std::logic_error(
+            "ML-KEM not implemented. Build with -DSR_MLKEM_PLACEHOLDER_OK to use placeholder.");
+#endif
         sodium_init_once();
         MLKEMKeyPair kp;
         // PLACEHOLDER: fill with random bytes

@@ -91,23 +91,35 @@ namespace sr::node
         return cfg;
     }
 
-    Config Config::from_args([[maybe_unused]] int argc, [[maybe_unused]] char** argv)
+    static void expand_tilde(Config& cfg)
     {
-        // TODO: CLI11 or manual arg parsing
-        // For now, look for --config <path> and delegate to from_file
-        Config cfg;
+        auto s = cfg.data_dir.string();
+        if (s.starts_with("~/"))
+        {
+            const char* home = std::getenv("HOME");
+            if (home)
+                cfg.data_dir = std::filesystem::path{home} / s.substr(2);
+        }
+    }
+
+    Config Config::from_args(int argc, char** argv)
+    {
+        std::string config_path;
+        bool cli_relay = false;
+
         for (int i = 1; i < argc; ++i)
         {
             std::string arg{argv[i]};
             if ((arg == "--config" || arg == "-c") && i + 1 < argc)
-            {
-                return from_file(argv[i + 1]);
-            }
-            if (arg == "--relay")
-            {
-                cfg.is_relay = true;
-            }
+                config_path = argv[++i];
+            else if (arg == "--relay")
+                cli_relay = true;
         }
+
+        Config cfg = config_path.empty() ? Config{} : from_file(config_path);
+        if (cli_relay)
+            cfg.is_relay = true;
+        expand_tilde(cfg);
         return cfg;
     }
 
