@@ -63,7 +63,7 @@ add_library(sr_path
     src/path/onion.cpp
 )
 target_include_directories(sr_path PUBLIC include)
-target_link_libraries(sr_path PUBLIC sr_contact)
+target_link_libraries(sr_path PUBLIC sr_contact sr_encoding)
 
 # oxen-libquic (pre-built)
 add_library(oxen-quic STATIC IMPORTED)
