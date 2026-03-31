@@ -18,6 +18,16 @@ endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium>=1.0.18)
 
+# Encoding library (BT encode/decode — wraps oxen-encoding)
+set(OXENC_DIR "${LIBQUIC_SRC_DIR}/external/oxen-encoding" CACHE PATH "Path to oxen-encoding source")
+add_library(sr_encoding
+    src/encoding/bt.cpp
+)
+target_include_directories(sr_encoding PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${OXENC_DIR})
+target_link_libraries(sr_encoding PUBLIC PkgConfig::SODIUM)
+
 # Crypto library (Layer 0)
 add_library(sr_crypto
     src/crypto/aead.cpp
@@ -29,7 +39,7 @@ add_library(sr_crypto
     src/crypto/session_keys.cpp
 )
 target_include_directories(sr_crypto PUBLIC include)
-target_link_libraries(sr_crypto PUBLIC PkgConfig::SODIUM)
+target_link_libraries(sr_crypto PUBLIC PkgConfig::SODIUM sr_encoding)
 
 # oxen-libquic paths (needed for oxen-encoding headers in Layer 1)
 set(LIBQUIC_BUILD_DIR "/tmp/oxen-libquic/build" CACHE PATH "Path to oxen-libquic build directory")
@@ -175,8 +185,14 @@ if(SR_TESTS)
     add_executable(test_bt
         test/test_bt.cpp
     )
-    target_link_libraries(test_bt PRIVATE sr_contact Catch2::Catch2WithMain)
+    target_link_libraries(test_bt PRIVATE sr_contact sr_encoding Catch2::Catch2WithMain)
     add_test(NAME bt COMMAND test_bt)
+
+    add_executable(test_wire_compat
+        test/test_wire_compat.cpp
+    )
+    target_link_libraries(test_wire_compat PRIVATE sr_session sr_encoding Catch2::Catch2WithMain)
+    add_test(NAME wire_compat COMMAND test_wire_compat)
 
     add_executable(test_exit
         test/test_exit.cpp
