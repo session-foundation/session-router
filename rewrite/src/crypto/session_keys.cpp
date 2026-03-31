@@ -15,44 +15,71 @@ namespace sr::crypto
         std::span<const std::byte> mlkem_shared_secret,
         std::span<const std::byte> mlkem_pk,
         const Ed25519PubKey& initiator_rid,
-        const Ed25519PubKey& receiver_rid)
+        const Ed25519PubKey& receiver_rid,
+        uint32_t tag_i,
+        uint32_t tag_r)
     {
         // X25519 DH
         unsigned char dh_result[crypto_scalarmult_BYTES];
         if (crypto_scalarmult(dh_result, as_uchar(our_x_sk), as_uchar(their_x_pk)) != 0)
             throw std::runtime_error("session_keys: X25519 scalar multiplication failed");
 
-        // Compute 64-byte hash:
-        // BLAKE2b-512(
-        //   key = "session-router-session-keys",
-        //   X || Y || dh_result || mlkem_ss || mlkem_pk || initiator_rid || receiver_rid
+        // === Phase 1: Context ===
+        // context = BLAKE2b-512(
+        //   key = "srouter session context",   // 23 bytes exactly
+        //   data = I || R || tag_i_le4 || tag_r_le4
         // )
-        // where X = initiator's X25519 pk, Y = receiver's X25519 pk
-        static constexpr std::string_view domain = "session-router-session-keys";
+        static constexpr std::string_view ctx_domain = "srouter session context";
 
+        Bytes<64> context;
+        {
+            crypto_generichash_state state;
+            crypto_generichash_init(
+                &state,
+                reinterpret_cast<const unsigned char*>(ctx_domain.data()),
+                ctx_domain.size(),
+                64);
+
+            // I = initiator Ed25519 pubkey (RouterID), 32 bytes
+            crypto_generichash_update(&state, as_uchar(initiator_rid), initiator_rid.size());
+            // R = receiver Ed25519 pubkey (RouterID), 32 bytes
+            crypto_generichash_update(&state, as_uchar(receiver_rid), receiver_rid.size());
+            // tag_i = initiator session tag, uint32 little-endian, 4 bytes
+            crypto_generichash_update(&state, reinterpret_cast<const unsigned char*>(&tag_i), 4);
+            // tag_r = receiver session tag, uint32 little-endian, 4 bytes
+            crypto_generichash_update(&state, reinterpret_cast<const unsigned char*>(&tag_r), 4);
+
+            crypto_generichash_final(&state, as_uchar(context), 64);
+        }
+
+        // === Phase 2: Key derivation ===
+        // [k1, k2] = BLAKE2b-512(
+        //   key = context,                       // 64 bytes (full Phase 1 output)
+        //   data = DH_result || X || Y || k_s || M
+        // )
         Bytes<64> h;
-        crypto_generichash_state state;
-        crypto_generichash_init(&state, reinterpret_cast<const unsigned char*>(domain.data()), domain.size(), 64);
+        {
+            crypto_generichash_state state;
+            crypto_generichash_init(&state, as_uchar(context), 64, 64);
 
-        // X (always initiator's pubkey)
-        crypto_generichash_update(&state, as_uchar(initiator_x_pk), initiator_x_pk.size());
-        // Y (always receiver's pubkey)
-        crypto_generichash_update(&state, as_uchar(receiver_x_pk), receiver_x_pk.size());
-        // DH result
-        crypto_generichash_update(&state, dh_result, sizeof(dh_result));
-        // ML-KEM shared secret
-        crypto_generichash_update(
-            &state, reinterpret_cast<const unsigned char*>(mlkem_shared_secret.data()), mlkem_shared_secret.size());
-        // ML-KEM public key
-        crypto_generichash_update(&state, reinterpret_cast<const unsigned char*>(mlkem_pk.data()), mlkem_pk.size());
-        // Initiator RouterID
-        crypto_generichash_update(&state, as_uchar(initiator_rid), initiator_rid.size());
-        // Receiver RouterID
-        crypto_generichash_update(&state, as_uchar(receiver_rid), receiver_rid.size());
+            // DH_result = X25519 scalar mult, 32 bytes
+            crypto_generichash_update(&state, dh_result, sizeof(dh_result));
+            // X = initiator's ephemeral X25519 pubkey, 32 bytes
+            crypto_generichash_update(&state, as_uchar(initiator_x_pk), initiator_x_pk.size());
+            // Y = receiver's ephemeral X25519 pubkey, 32 bytes
+            crypto_generichash_update(&state, as_uchar(receiver_x_pk), receiver_x_pk.size());
+            // k_s = ML-KEM shared secret, 32 bytes
+            crypto_generichash_update(
+                &state, reinterpret_cast<const unsigned char*>(mlkem_shared_secret.data()), mlkem_shared_secret.size());
+            // M = initiator's ML-KEM-768 pubkey, 1184 bytes
+            crypto_generichash_update(
+                &state, reinterpret_cast<const unsigned char*>(mlkem_pk.data()), mlkem_pk.size());
 
-        crypto_generichash_final(&state, as_uchar(h), 64);
+            crypto_generichash_final(&state, as_uchar(h), 64);
+        }
 
         sodium_memzero(dh_result, sizeof(dh_result));
+        sodium_memzero(context.data(), context.size());
 
         // Split: k1 = first 32 bytes, k2 = last 32 bytes
         // CONSTRAINT: initiator uses (out=k1, in=k2), receiver uses (out=k2, in=k1)
