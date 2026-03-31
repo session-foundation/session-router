@@ -97,7 +97,7 @@ add_library(sr_session
     src/session/session.cpp
 )
 target_include_directories(sr_session PUBLIC include)
-target_link_libraries(sr_session PUBLIC sr_path)
+target_link_libraries(sr_session PUBLIC sr_path sr_encoding)
 
 # Link library (Layer 4)
 add_library(sr_link
@@ -173,7 +173,7 @@ if(SR_TESTS)
     add_executable(test_session
         test/test_session.cpp
     )
-    target_link_libraries(test_session PRIVATE sr_session Catch2::Catch2WithMain)
+    target_link_libraries(test_session PRIVATE sr_session sr_encoding Catch2::Catch2WithMain)
     add_test(NAME session COMMAND test_session)
 
     add_executable(test_link
