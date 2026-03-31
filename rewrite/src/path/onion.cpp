@@ -282,4 +282,43 @@ namespace sr::path
         }
     }
 
+    // === Path message framing ===
+
+    std::vector<std::byte> append_path_trailer(
+        std::span<const std::byte> payload,
+        const Nonce& nonce,
+        const HopID& hopid,
+        uint8_t msgtype)
+    {
+        std::vector<std::byte> msg;
+        msg.reserve(payload.size() + PATH_TRAILER_SIZE);
+        msg.insert(msg.end(), payload.begin(), payload.end());
+        msg.insert(msg.end(), nonce.begin(), nonce.end());
+        msg.insert(msg.end(), hopid.begin(), hopid.end());
+        msg.push_back(static_cast<std::byte>(msgtype));
+        return msg;
+    }
+
+    std::optional<PathTrailer> strip_path_trailer(
+        std::span<const std::byte> msg,
+        std::span<std::byte>& payload_out)
+    {
+        if (msg.size() < PATH_TRAILER_SIZE)
+            return std::nullopt;
+
+        size_t payload_len = msg.size() - PATH_TRAILER_SIZE;
+        size_t off = payload_len;
+
+        PathTrailer t;
+        std::memcpy(t.nonce.data(), msg.data() + off, 24);
+        off += 24;
+        std::memcpy(t.hopid.data(), msg.data() + off, 16);
+        off += 16;
+        t.msgtype = static_cast<uint8_t>(msg[off]);
+
+        // payload_out points into the original msg span
+        payload_out = std::span<std::byte>(const_cast<std::byte*>(msg.data()), payload_len);
+        return t;
+    }
+
 }  // namespace sr::path

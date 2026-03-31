@@ -109,6 +109,49 @@ TEST_CASE("Onion hop ID chaining: pivot txid == pivot rxid", "[path][onion]")
     REQUIRE(pivot.txid == pivot.rxid);
 }
 
+TEST_CASE("Path message framing: append and strip trailer", "[path][framing]")
+{
+    std::vector<std::byte> payload(100);
+    randombytes_buf(payload.data(), payload.size());
+
+    Nonce nonce;
+    randombytes_buf(nonce.data(), nonce.size());
+    HopID hopid = random_hop_id();
+
+    auto msg = append_path_trailer(payload, nonce, hopid, PATH_MSG_DATA_OR_CONTROL);
+    REQUIRE(msg.size() == payload.size() + PATH_TRAILER_SIZE);
+
+    std::span<std::byte> payload_out;
+    auto trailer = strip_path_trailer(msg, payload_out);
+    REQUIRE(trailer.has_value());
+    REQUIRE(trailer->nonce == nonce);
+    REQUIRE(trailer->hopid == hopid);
+    REQUIRE(trailer->msgtype == PATH_MSG_DATA_OR_CONTROL);
+    REQUIRE(payload_out.size() == payload.size());
+    REQUIRE(std::equal(payload_out.begin(), payload_out.end(), payload.begin()));
+}
+
+TEST_CASE("Path message framing: session handshake type", "[path][framing]")
+{
+    std::vector<std::byte> payload = {std::byte{0x42}};
+    Nonce nonce{};
+    HopID hopid{};
+
+    auto msg = append_path_trailer(payload, nonce, hopid, PATH_MSG_SESSION_HANDSHAKE);
+    std::span<std::byte> payload_out;
+    auto trailer = strip_path_trailer(msg, payload_out);
+    REQUIRE(trailer.has_value());
+    REQUIRE(trailer->msgtype == PATH_MSG_SESSION_HANDSHAKE);
+}
+
+TEST_CASE("Path message framing: too short returns nullopt", "[path][framing]")
+{
+    std::vector<std::byte> short_msg(PATH_TRAILER_SIZE - 1);
+    std::span<std::byte> payload_out;
+    auto trailer = strip_path_trailer(short_msg, payload_out);
+    REQUIRE_FALSE(trailer.has_value());
+}
+
 TEST_CASE("Onion only encrypts real frames, not dummies", "[path][onion]")
 {
     auto r0 = make_relay(0);
