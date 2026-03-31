@@ -2,6 +2,7 @@
 #include <sr/crypto/session_keys.hpp>
 
 #include <cstring>
+#include <endian.h>
 
 namespace sr::crypto
 {
@@ -45,9 +46,11 @@ namespace sr::crypto
             // R = receiver Ed25519 pubkey (RouterID), 32 bytes
             crypto_generichash_update(&state, as_uchar(receiver_rid), receiver_rid.size());
             // tag_i = initiator session tag, uint32 little-endian, 4 bytes
-            crypto_generichash_update(&state, reinterpret_cast<const unsigned char*>(&tag_i), 4);
+            uint32_t tag_i_le = htole32(tag_i);
+            crypto_generichash_update(&state, reinterpret_cast<const unsigned char*>(&tag_i_le), 4);
             // tag_r = receiver session tag, uint32 little-endian, 4 bytes
-            crypto_generichash_update(&state, reinterpret_cast<const unsigned char*>(&tag_r), 4);
+            uint32_t tag_r_le = htole32(tag_r);
+            crypto_generichash_update(&state, reinterpret_cast<const unsigned char*>(&tag_r_le), 4);
 
             crypto_generichash_final(&state, as_uchar(context), 64);
         }

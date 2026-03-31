@@ -164,18 +164,19 @@ namespace sr::path
             auto frame_start = result.frames.data() + i * BUILD_FRAME_SIZE;
             build_frame(frame_start, ephemeral_keys.pk, nonce, encrypted_inner);
 
-            // Onion-encrypt ALL subsequent REAL frames (not dummies) with this hop's key
-            for (size_t j = i + 1; j < n_hops; ++j)
+            // Onion-encrypt ALL subsequent REAL frames as ONE contiguous block
+            // XChaCha20 is a stream cipher — the keystream must be continuous across frames.
+            size_t following = n_hops - 1 - static_cast<size_t>(i);
+            if (following > 0)
             {
-                auto other_frame = std::span<std::byte>(
-                    result.frames.data() + j * BUILD_FRAME_SIZE, BUILD_FRAME_SIZE);
-
-                // XOR nonce for onion layer
                 Nonce onion_nonce = nonce;
                 for (size_t k = 0; k < onion_nonce.size(); ++k)
                     onion_nonce[k] ^= hop.xor_nonce[k];
 
-                xchacha20_inplace(other_frame, sym_key, onion_nonce);
+                auto contiguous = std::span<std::byte>(
+                    result.frames.data() + (static_cast<size_t>(i) + 1) * BUILD_FRAME_SIZE,
+                    following * BUILD_FRAME_SIZE);
+                xchacha20_inplace(contiguous, sym_key, onion_nonce);
             }
         }
 

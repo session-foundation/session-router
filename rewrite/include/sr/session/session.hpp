@@ -133,7 +133,8 @@ namespace sr::session
         static std::optional<SessionAccept> unseal(
             std::span<const std::byte> bt_outer,
             const sr::crypto::Ed25519PubKey& our_pk,
-            const sr::crypto::Ed25519SecKey& our_sk);
+            const sr::crypto::Ed25519SecKey& our_sk,
+            const sr::crypto::Ed25519PubKey& remote_pk);
     };
 
     // Session control message: BT dict {"e":"<method>", "p":<body>}

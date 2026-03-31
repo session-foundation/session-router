@@ -131,7 +131,7 @@ TEST_CASE("SessionAccept BT seal/unseal round-trip", "[session]")
     randombytes_buf(sa.mlkem_ciphertext.data(), sa.mlkem_ciphertext.size());
 
     auto sealed = sa.seal_for(initiator.pk, receiver.sk);
-    auto unsealed = SessionAccept::unseal(sealed, initiator.pk, initiator.sk);
+    auto unsealed = SessionAccept::unseal(sealed, initiator.pk, initiator.sk, receiver.pk);
     REQUIRE(unsealed.has_value());
     REQUIRE(unsealed->x_pubkey == sa.x_pubkey);
     REQUIRE(unsealed->tag == sa.tag);
@@ -161,11 +161,8 @@ TEST_CASE("Session empty plaintext", "[session]")
 TEST_CASE("Session data message format: tag is big-endian", "[session]")
 {
     auto keys = make_test_keys();
-    SessionTag tag;
-    tag[0] = std::byte{0x01};
-    tag[1] = std::byte{0x02};
-    tag[2] = std::byte{0x03};
-    tag[3] = std::byte{0x04};
+    // Tag from uint32 0x01020304 — big-endian on wire: 0x01, 0x02, 0x03, 0x04
+    auto tag = uint_to_tag(0x01020304);
 
     PivotID pivot{};
     auto session = Session::from_keys(keys, tag, pivot);
@@ -178,7 +175,7 @@ TEST_CASE("Session data message format: tag is big-endian", "[session]")
     REQUIRE(msg.size() >= 20);
     size_t tag_off = msg.size() - 20;
 
-    // Session tag bytes appear on the wire exactly as stored
+    // Session tag bytes in big-endian order
     REQUIRE(msg[tag_off] == std::byte{0x01});
     REQUIRE(msg[tag_off + 1] == std::byte{0x02});
     REQUIRE(msg[tag_off + 2] == std::byte{0x03});

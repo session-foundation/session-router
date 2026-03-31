@@ -3,6 +3,7 @@
 #include <sr/session/session.hpp>
 
 #include <cstring>
+#include <endian.h>
 
 namespace sr::session
 {
@@ -64,8 +65,10 @@ namespace sr::session
         msg.reserve(ct.size() + 4 + 16);
         msg.insert(msg.end(), ct.begin(), ct.end());
 
-        // Session tag (4 bytes, big-endian on wire — stored as raw bytes)
-        msg.insert(msg.end(), _tag.begin(), _tag.end());
+        // Session tag (4 bytes, big-endian on wire)
+        uint32_t tag_be = htobe32(tag_to_uint(_tag));
+        auto tag_ptr = reinterpret_cast<const std::byte*>(&tag_be);
+        msg.insert(msg.end(), tag_ptr, tag_ptr + 4);
 
         // Pivot ID (16 bytes)
         msg.insert(msg.end(), _pivot_id.begin(), _pivot_id.end());
@@ -110,11 +113,8 @@ namespace sr::session
             dp.append("X", std::string_view{reinterpret_cast<const char*>(x_pubkey.data()), 32});
             dp.append("p", std::string_view{reinterpret_cast<const char*>(pivot_id.data()), 16});
 
-            // "t" — session tag as uint32 LE encoded as 4-byte string
-            uint32_t t = tag_to_uint(tag);
-            std::array<char, 4> tag_buf;
-            std::memcpy(tag_buf.data(), &t, 4);
-            dp.append("t", std::string_view{tag_buf.data(), 4});
+            // "t" — session tag as BT integer (upstream uses uint32_t integer encoding)
+            dp.append("t", static_cast<uint64_t>(tag_to_uint(tag)));
 
             inner_prefix = std::move(dp).str();
         }
@@ -209,15 +209,11 @@ namespace sr::session
                 return std::nullopt;
             std::memcpy(si.pivot_id.data(), p_sv.data(), 16);
 
-            // "t" -> session tag
+            // "t" -> session tag (BT integer)
             if (!idc.skip_until("t"))
                 return std::nullopt;
-            auto t_sv = idc.consume_string_view();
-            if (t_sv.size() < 4)
-                return std::nullopt;
-            uint32_t t;
-            std::memcpy(&t, t_sv.data(), 4);
-            si.tag = uint_to_tag(t);
+            auto t_val = idc.consume_integer<uint32_t>();
+            si.tag = uint_to_tag(t_val);
 
             // "~" -> signature
             if (!idc.skip_until("~"))
@@ -253,10 +249,8 @@ namespace sr::session
             dp.append("Y", std::string_view{reinterpret_cast<const char*>(x_pubkey.data()), 32});
             dp.append("c", std::string_view{reinterpret_cast<const char*>(mlkem_ciphertext.data()), mlkem_ciphertext.size()});
 
-            uint32_t t = tag_to_uint(tag);
-            std::array<char, 4> tag_buf;
-            std::memcpy(tag_buf.data(), &t, 4);
-            dp.append("t", std::string_view{tag_buf.data(), 4});
+            // "t" — session tag as BT integer (upstream uses uint32_t integer encoding)
+            dp.append("t", static_cast<uint64_t>(tag_to_uint(tag)));
 
             inner_prefix = std::move(dp).str();
         }
@@ -285,7 +279,8 @@ namespace sr::session
     }
 
     std::optional<SessionAccept> SessionAccept::unseal(
-        std::span<const std::byte> bt_outer, const Ed25519PubKey& our_pk, const Ed25519SecKey& our_sk)
+        std::span<const std::byte> bt_outer, const Ed25519PubKey& our_pk, const Ed25519SecKey& our_sk,
+        const Ed25519PubKey& remote_pk)
     {
         try
         {
@@ -330,15 +325,11 @@ namespace sr::session
                 return std::nullopt;
             std::memcpy(sa.mlkem_ciphertext.data(), c_sv.data(), sa.mlkem_ciphertext.size());
 
-            // "t" -> session tag
+            // "t" -> session tag (BT integer)
             if (!idc.skip_until("t"))
                 return std::nullopt;
-            auto t_sv = idc.consume_string_view();
-            if (t_sv.size() < 4)
-                return std::nullopt;
-            uint32_t t;
-            std::memcpy(&t, t_sv.data(), 4);
-            sa.tag = uint_to_tag(t);
+            auto t_val = idc.consume_integer<uint32_t>();
+            sa.tag = uint_to_tag(t_val);
 
             // "~" -> signature
             if (!idc.skip_until("~"))
@@ -347,6 +338,11 @@ namespace sr::session
             if (sig_sv.size() < 64)
                 return std::nullopt;
             std::memcpy(sa.signature.data(), sig_sv.data(), 64);
+
+            // Verify signature over the prefix (matching SessionInit::unseal pattern)
+            auto inner_str = std::string(inner_sv);
+            if (!verify_signature(inner_str, as_uchar(remote_pk)))
+                return std::nullopt;
 
             return sa;
         }
