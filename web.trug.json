@@ -1,0 +1,974 @@
+{
+  "meta": {
+    "id": "web_security_probe_1253",
+    "name": "Security Probe Research — Session Router",
+    "description": "Web research graph for issue #1253 — dual-target security audit",
+    "version": "0.2.0",
+    "created": "2026-03-31",
+    "updated": "2026-03-31",
+    "branch": "SECURITY"
+  },
+  "nodes": [
+    {
+      "id": "quarkslab_audit",
+      "type": "SOURCE",
+      "properties": {
+        "title": "Quarkslab Audit of Session (2021)",
+        "url": "https://blog.quarkslab.com/audit-of-session-secure-messaging-application.html",
+        "report_url": "https://blog.quarkslab.com/resources/2021-05-04_audit-of-session-secure-messaging-application/20-08-Oxen-REP-v1.4.pdf",
+        "scope": "Android, iOS, Desktop — 42 days, 2 engineers",
+        "overall_assessment": "Good security level, usable for privacy-concerned people",
+        "findings_count": { "android": 7, "ios": 7, "desktop": 2 },
+        "severe_finding": "Android TLS verification bypass when fetching service node list — MITM via malicious CA",
+        "status": "All important findings patched",
+        "note": "Audit covered Session app, NOT session-router/lokinet layer"
+      },
+      "parent_id": "prior_art",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "research"
+    },
+    {
+      "id": "session_protocol_v2",
+      "type": "SOURCE",
+      "properties": {
+        "title": "Session Protocol V2 — PFS + Post-Quantum",
+        "url": "https://getsession.org/session-protocol-explained",
+        "technical_url": "https://getsession.org/blog/session-protocol-technical-information",
+        "status": "Under development, specs expected 2026",
+        "changes": [
+          "Re-introducing Perfect Forward Secrecy via rotating key pairs",
+          "ML-KEM-768 post-quantum key encapsulation (NIST approved)",
+          "Per-device rotating keys + shared per-account rotating key",
+          "Linked device management and remote revocation"
+        ],
+        "crypto_current": {
+          "identity": "X25519 long-term keypair (public = Session ID)",
+          "signing": "ED25519",
+          "encryption": "libsodium crypto_box_sealed()",
+          "symmetric": "AES-GCM (backwards compat) or crypto_box_sealed (full)",
+          "key_derivation": "HKDF from ECDH shared secret"
+        },
+        "security_implication": "V2 changes key exchange fundamentally — our session init/accept will need updating"
+      },
+      "parent_id": "prior_art",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "research"
+    },
+    {
+      "id": "quic_fuzz_paper",
+      "type": "SOURCE",
+      "properties": {
+        "title": "QUIC-Fuzz: Effective Greybox Fuzzer for QUIC (ESORICS 2025)",
+        "url": "https://arxiv.org/abs/2503.19402",
+        "findings": "10 new vulnerabilities, 2 CVE assignments across 6 implementations",
+        "technique": "Greybox fuzzing, 84% more code coverage than prior fuzzers",
+        "targets_tested": "Google, Alibaba, and 4 other QUIC server implementations",
+        "relevance": "Same technique applicable to oxen-libquic"
+      },
+      "parent_id": "prior_art",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "research"
+    },
+    {
+      "id": "quic_leak_cve",
+      "type": "SOURCE",
+      "properties": {
+        "title": "QUIC-LEAK CVE-2025-54939 — Pre-handshake DoS in LSQUIC",
+        "url": "https://www.imperva.com/blog/quic-leak-cve-2025-54939-new-high-risk-pre-handshake-remote-denial-of-service-in-lsquic-quic-implementation/",
+        "severity": "HIGH",
+        "mechanism": "Memory exhaustion before handshake — bypasses all QUIC protections",
+        "relevance": "Pre-handshake resource exhaustion is directly applicable to our probe design"
+      },
+      "parent_id": "prior_art",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "research"
+    },
+    {
+      "id": "quic_attack_taxonomy",
+      "type": "SOURCE",
+      "properties": {
+        "title": "Revisiting QUIC Attacks — Comprehensive Review (Springer 2022)",
+        "url": "https://link.springer.com/article/10.1007/s10207-022-00630-6",
+        "attack_categories": [
+          "Fuzzing flood attacks",
+          "Impersonation attacks",
+          "Information leak attacks",
+          "QUIC-loris (slowloris equivalent)",
+          "Enumeration attacks",
+          "Connection ID manipulation",
+          "0-RTT replay attacks"
+        ],
+        "relevance": "Comprehensive taxonomy — every category should map to a probe"
+      },
+      "parent_id": "prior_art",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "research"
+    },
+    {
+      "id": "quic_security_survey",
+      "type": "SOURCE",
+      "properties": {
+        "title": "QUIC Security & Privacy Survey (IEEE 2024)",
+        "url": "https://ieeexplore.ieee.org/document/10677379/",
+        "scope": "Comprehensive survey of QUIC vulnerabilities, threats, attacks",
+        "key_insight": "QUIC's benefits (reduced latency, connection migration, default encryption) introduce new attack surfaces"
+      },
+      "parent_id": "prior_art",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "research"
+    },
+    {
+      "id": "oxen_libquic_crashes",
+      "type": "SOURCE",
+      "properties": {
+        "title": "oxen-libquic Stability Crashes (2024)",
+        "url": "https://oxen.io/upcoming-msnu",
+        "context": "iOS QUIC connections uncovered crash cases in oxen-libquic affecting storage server",
+        "impact": "Any crash along onion path interrupts ALL connections through that node — cascading failure",
+        "fix": "Mandatory service node upgrade with oxen-libquic fixes",
+        "relevance": "Crash-on-unexpected-input is exactly what our probes should find"
+      },
+      "parent_id": "prior_art",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "research"
+    },
+    {
+      "id": "tor_deanon_research",
+      "type": "SOURCE",
+      "properties": {
+        "title": "De-anonymisation Attacks on Tor: A Survey",
+        "url": "https://arxiv.org/pdf/2009.13018",
+        "key_stat": "32% of Tor research focuses on deanonymization attacks",
+        "attack_vectors": [
+          "Traffic correlation (timing)",
+          "Website fingerprinting",
+          "Relay vulnerabilities",
+          "Protocol message exploitation",
+          "Path selection manipulation"
+        ],
+        "session_relevance": "Session uses 3-hop onion routing like Tor — same attack classes apply"
+      },
+      "parent_id": "prior_art",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "research"
+    },
+    {
+      "id": "detorrent_defense",
+      "type": "SOURCE",
+      "properties": {
+        "title": "DeTorrent: Adversarial Padding-only Traffic Analysis Defense (PETS 2024)",
+        "url": "https://petsymposium.org/popets/2024/popets-2024-0007.pdf",
+        "technique": "Competing neural networks generate dummy traffic to defeat analysis",
+        "result": "Reduces attacker accuracy by 61.5% with moderate overhead",
+        "relevance": "Padding-based defense applicable to session-router traffic analysis"
+      },
+      "parent_id": "prior_art",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "research"
+    },
+    {
+      "id": "libsodium_sealed_box",
+      "type": "SOURCE",
+      "properties": {
+        "title": "libsodium crypto_box_seal — Nonce Derivation Concern",
+        "url": "https://github.com/jedisct1/libsodium/issues/630",
+        "docs_url": "https://doc.libsodium.org/public-key_cryptography/sealed_boxes",
+        "concern": "Nonce derived from ephemeral_pk + recipient_pk — ephemeral key reuse breaks confidentiality",
+        "mitigation": "Secret key overwritten after function returns — prevents accidental reuse",
+        "overall_assessment": "No major vulnerabilities found in libsodium security review",
+        "relevance": "Our session init uses crypto_box_seal — ensure ephemeral key never reused"
+      },
+      "parent_id": "prior_art",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "research"
+    },
+    {
+      "id": "session_arxiv_paper",
+      "type": "SOURCE",
+      "properties": {
+        "title": "Session: End-To-End Encrypted Conversations With Minimal Metadata Leakage",
+        "url": "https://arxiv.org/pdf/2002.04609",
+        "year": 2020,
+        "relevance": "Original Session protocol design paper — describes threat model and security guarantees"
+      },
+      "parent_id": "prior_art",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "research"
+    },
+    {
+      "id": "tor_attacks_repo",
+      "type": "SOURCE",
+      "properties": {
+        "title": "Thirteen Years of Tor Attacks (GitHub catalog)",
+        "url": "https://github.com/Attacks-on-Tor/Attacks-on-Tor",
+        "relevance": "Comprehensive catalog of attack techniques — many applicable to Session's 3-hop routing"
+      },
+      "parent_id": "prior_art",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "research"
+    },
+    {
+      "id": "prior_art",
+      "type": "CATEGORY",
+      "properties": {
+        "name": "Prior Art & Research",
+        "description": "External sources informing probe design"
+      },
+      "parent_id": null,
+      "contains": [
+        "quarkslab_audit",
+        "session_protocol_v2",
+        "quic_fuzz_paper",
+        "quic_leak_cve",
+        "quic_attack_taxonomy",
+        "quic_security_survey",
+        "oxen_libquic_crashes",
+        "tor_deanon_research",
+        "detorrent_defense",
+        "libsodium_sealed_box",
+        "session_arxiv_paper",
+        "tor_attacks_repo"
+      ],
+      "metric_level": "L1_SYSTEM",
+      "dimension": "research"
+    },
+    {
+      "id": "probe_categories",
+      "type": "CATEGORY",
+      "properties": {
+        "name": "Probe Categories",
+        "description": "Security probe categories derived from research"
+      },
+      "parent_id": null,
+      "contains": [
+        "probe_wire_fuzzing",
+        "probe_crypto_boundary",
+        "probe_protocol_state",
+        "probe_quic_transport",
+        "probe_bootstrap_identity",
+        "probe_resource_exhaustion",
+        "probe_traffic_analysis",
+        "probe_0rtt_replay"
+      ],
+      "metric_level": "L1_SYSTEM",
+      "dimension": "security"
+    },
+    {
+      "id": "probe_wire_fuzzing",
+      "type": "PROBE_CATEGORY",
+      "properties": {
+        "name": "Wire Format Fuzzing",
+        "priority": 1,
+        "informed_by": ["quarkslab_audit", "oxen_libquic_crashes"],
+        "rationale": "BT encoding mismatches caused all 30+ critical bugs in our rewrite — same class of bugs likely exists in upstream parser",
+        "probes": [
+          "Malformed BT dict — missing closing 'e'",
+          "BT dict with duplicate keys",
+          "BT dict with keys out of lexicographic order",
+          "Session init with truncated sealed box",
+          "Session init with oversized sealed box (>MAX)",
+          "Session init with wrong handshake type byte",
+          "Session accept before session init",
+          "Path build frame not exactly 169 bytes",
+          "Path build with 0 real hops",
+          "Path build with >8 hops (overflow BUILD_LENGTH)",
+          "Inner payload BT dict with extra unknown keys",
+          "Inner payload with negative lifetime",
+          "Session data with tampered session tag",
+          "Session data with tampered pivot ID",
+          "Control message with empty method name",
+          "Control message with 1MB body"
+        ]
+      },
+      "parent_id": "probe_categories",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "security"
+    },
+    {
+      "id": "probe_crypto_boundary",
+      "type": "PROBE_CATEGORY",
+      "properties": {
+        "name": "Cryptographic Boundary Testing",
+        "priority": 2,
+        "informed_by": ["libsodium_sealed_box", "session_protocol_v2"],
+        "rationale": "Key derivation had 6 critical mismatches — boundary conditions in crypto are where silent failures hide",
+        "probes": [
+          "Session key derivation with all-zero DH result (low-order point)",
+          "Session key derivation with identity element as X25519 pubkey",
+          "ML-KEM encapsulation with corrupted ciphertext (single bit flip)",
+          "ML-KEM with wrong-size ciphertext (1087 or 1089 bytes)",
+          "Sealed box with recipient's own pubkey as sender",
+          "Sealed box decryption with wrong key (must fail, not crash)",
+          "AEAD decryption with tampered ciphertext (each byte position)",
+          "AEAD decryption with tampered 4-byte tag",
+          "AEAD with maximum-length plaintext",
+          "Nonce counter overflow (2^64 messages on one session)",
+          "Session tag collision — two sessions with same tag value",
+          "Ed25519 signature with all-zero signature bytes",
+          "Ed25519 verify with small-order public key"
+        ]
+      },
+      "parent_id": "probe_categories",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "security"
+    },
+    {
+      "id": "probe_protocol_state",
+      "type": "PROBE_CATEGORY",
+      "properties": {
+        "name": "Protocol State Machine",
+        "priority": 3,
+        "informed_by": ["quarkslab_audit", "tor_deanon_research"],
+        "rationale": "Quarkslab found state-related issues in Session app — same class applies to router",
+        "probes": [
+          "Session init without prior path build",
+          "Double session init (replay)",
+          "Session accept with wrong session tag",
+          "Session data before handshake completes",
+          "Session data after session close",
+          "Path build with expired lifetime (0 seconds)",
+          "Path build with far-future lifetime (MAX_UINT32)",
+          "Control message with unknown method name",
+          "Path switch to non-existent path",
+          "Concurrent session init from both sides (race)",
+          "Session close then immediate re-init (rapid cycling)"
+        ]
+      },
+      "parent_id": "probe_categories",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "security"
+    },
+    {
+      "id": "probe_quic_transport",
+      "type": "PROBE_CATEGORY",
+      "properties": {
+        "name": "QUIC Transport Layer",
+        "priority": 4,
+        "informed_by": ["quic_fuzz_paper", "quic_leak_cve", "quic_attack_taxonomy", "oxen_libquic_crashes"],
+        "rationale": "QUIC-Fuzz found 10 vulns in major implementations; QUIC-LEAK shows pre-handshake DoS; oxen-libquic had crash bugs",
+        "probes": [
+          "Connection with wrong ALPN string",
+          "Connection with empty ALPN",
+          "Rapid connection open/close cycling (100+ connections)",
+          "Maximum concurrent connections to single endpoint",
+          "Datagram larger than QUIC max datagram frame",
+          "Datagram with zero bytes",
+          "BTStream with command name >64KB",
+          "BTStream with malformed BT-encoded command body",
+          "Connection with invalid TLS certificate",
+          "Connection from non-Ed25519 key (wrong key type)",
+          "QUIC-loris: open connection, send 1 byte/second",
+          "Pre-handshake flood (QUIC-LEAK pattern)",
+          "Connection migration mid-session"
+        ]
+      },
+      "parent_id": "probe_categories",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "security"
+    },
+    {
+      "id": "probe_0rtt_replay",
+      "type": "PROBE_CATEGORY",
+      "properties": {
+        "name": "0-RTT Replay Attacks",
+        "priority": 4,
+        "informed_by": ["quic_attack_taxonomy", "quic_security_survey"],
+        "rationale": "Our rewrite enables 0-RTT with 1-minute anti-replay — need to verify the window actually works",
+        "probes": [
+          "0-RTT replay within anti-replay window (should reject)",
+          "0-RTT replay after anti-replay window expires",
+          "0-RTT with expired session ticket (>24 hours)",
+          "0-RTT data that triggers state mutation (idempotency test)",
+          "Multiple 0-RTT attempts with same ticket simultaneously"
+        ]
+      },
+      "parent_id": "probe_categories",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "security"
+    },
+    {
+      "id": "probe_bootstrap_identity",
+      "type": "PROBE_CATEGORY",
+      "properties": {
+        "name": "Bootstrap & Identity",
+        "priority": 5,
+        "informed_by": ["quarkslab_audit"],
+        "rationale": "Quarkslab's severe finding was TLS verification on node list — bootstrap is the trust root",
+        "probes": [
+          "bootstrap.signed with invalid Ed25519 signature",
+          "bootstrap.signed with signature over modified payload",
+          "RC with expired timestamp (>30 days old)",
+          "RC with future timestamp (clock skew attack)",
+          "RC with timestamp = 0",
+          "RC with non-routable IPv4 (10.x, 192.168.x)",
+          "RC with non-routable IPv6 (fe80::, ::1)",
+          "RC exceeding 2048 byte max size",
+          "RC with unknown version number",
+          "RC with missing required fields",
+          "Bootstrap fetch response with oversized zstd payload (>20MB)",
+          "Bootstrap fetch response with zstd bomb (small compressed, huge decompressed)",
+          "Bootstrap file with 10,000 RCs (resource exhaustion)",
+          "Bootstrap file with duplicate router IDs"
+        ]
+      },
+      "parent_id": "probe_categories",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "security"
+    },
+    {
+      "id": "probe_resource_exhaustion",
+      "type": "PROBE_CATEGORY",
+      "properties": {
+        "name": "Resource Exhaustion",
+        "priority": 5,
+        "informed_by": ["quic_leak_cve", "oxen_libquic_crashes"],
+        "rationale": "QUIC-LEAK proved pre-handshake memory exhaustion is exploitable; oxen-libquic had crash-on-unexpected-input",
+        "probes": [
+          "Memory: accumulate path builds without completing sessions",
+          "Memory: open sessions without sending data (idle accumulation)",
+          "CPU: flood with computationally expensive sealed box operations",
+          "CPU: rapid session init/accept cycling (key derivation spam)",
+          "File descriptors: exhaust via QUIC connection flood",
+          "Disk: trigger excessive logging via malformed messages",
+          "NodeDB: insert 100,000 RCs (routing table bloat)",
+          "Path build flood: 1000 concurrent path builds"
+        ]
+      },
+      "parent_id": "probe_categories",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "security"
+    },
+    {
+      "id": "probe_traffic_analysis",
+      "type": "PROBE_CATEGORY",
+      "properties": {
+        "name": "Traffic Analysis & Deanonymization",
+        "priority": 6,
+        "informed_by": ["tor_deanon_research", "detorrent_defense", "session_arxiv_paper"],
+        "rationale": "32% of Tor research is deanon attacks; Session's 3-hop routing faces identical threat class. Sybil cost is the main defense.",
+        "probes": [
+          "Timing correlation: measure latency variance across paths",
+          "Traffic fingerprinting: identify message types by size patterns",
+          "Path selection bias: verify path selection is uniformly random",
+          "Sybil detection: how many nodes needed to control a path",
+          "Padding analysis: do different message types have distinguishable sizes",
+          "Session linkability: can repeated sessions to same destination be linked",
+          "Guard node detection: is first hop reused across sessions"
+        ],
+        "note": "These are analysis probes, not attacks — measuring resistance, not exploiting"
+      },
+      "parent_id": "probe_categories",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "security"
+    },
+    {
+      "id": "gap_no_router_audit",
+      "type": "FINDING",
+      "properties": {
+        "title": "No security audit exists for session-router itself",
+        "detail": "Quarkslab audited the Session app (Android/iOS/Desktop) but NOT the session-router/lokinet routing layer. The transport, path building, session negotiation, and exit mode have never been independently audited.",
+        "severity": "HIGH",
+        "source": "quarkslab_audit"
+      },
+      "parent_id": "findings",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "security"
+    },
+    {
+      "id": "gap_v2_proto_change",
+      "type": "FINDING",
+      "properties": {
+        "title": "Protocol V2 will change key exchange — our implementation needs updating",
+        "detail": "Session Protocol V2 introduces rotating keys, per-device ephemeral keys, and ML-KEM changes. Our current session init/accept implements V1 wire format. V2 specs expected 2026.",
+        "severity": "MEDIUM",
+        "source": "session_protocol_v2"
+      },
+      "parent_id": "findings",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "security"
+    },
+    {
+      "id": "gap_oxen_libquic_crash",
+      "type": "FINDING",
+      "properties": {
+        "title": "oxen-libquic has history of crash-on-unexpected-input",
+        "detail": "iOS QUIC connections uncovered crash cases that affected storage servers AND other onion path users. A crash anywhere on the onion path cascades to all connections through that node. Mandatory service node upgrades were required to fix.",
+        "severity": "HIGH",
+        "source": "oxen_libquic_crashes"
+      },
+      "parent_id": "findings",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "security"
+    },
+    {
+      "id": "gap_no_pfs_v1",
+      "type": "FINDING",
+      "properties": {
+        "title": "Session V1 protocol deliberately lacks PFS",
+        "detail": "Session removed Perfect Forward Secrecy from V1 protocol, arguing 'physical access is total access'. V2 will re-add it. Until V2 ships, long-term key compromise exposes all historical messages.",
+        "severity": "MEDIUM",
+        "source": "session_protocol_v2"
+      },
+      "parent_id": "findings",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "security"
+    },
+    {
+      "id": "gap_pre_handshake_dos",
+      "type": "FINDING",
+      "properties": {
+        "title": "Pre-handshake resource exhaustion is a proven QUIC attack vector",
+        "detail": "CVE-2025-54939 (QUIC-LEAK) demonstrated memory exhaustion before handshake in LSQUIC, bypassing all standard QUIC protections. Same attack pattern should be tested against oxen-libquic.",
+        "severity": "HIGH",
+        "source": "quic_leak_cve"
+      },
+      "parent_id": "findings",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "security"
+    },
+    {
+      "id": "gap_bt_parser_untested",
+      "type": "FINDING",
+      "properties": {
+        "title": "BT encoding parsers have no published fuzz testing",
+        "detail": "No bencode/BT-encoding fuzzing research exists in public literature. Session-router's BT parser (oxen-encoding) processes every message on the wire. An exploitable parser bug = remote code execution on every service node.",
+        "severity": "CRITICAL",
+        "source": "quic_fuzz_paper"
+      },
+      "parent_id": "findings",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "security"
+    },
+    {
+      "id": "findings",
+      "type": "CATEGORY",
+      "properties": {
+        "name": "Research Findings & Gaps",
+        "description": "Security gaps identified from web research"
+      },
+      "parent_id": null,
+      "contains": [
+        "gap_no_router_audit",
+        "gap_v2_proto_change",
+        "gap_oxen_libquic_crash",
+        "gap_no_pfs_v1",
+        "gap_pre_handshake_dos",
+        "gap_bt_parser_untested"
+      ],
+      "metric_level": "L1_SYSTEM",
+      "dimension": "security"
+    },
+    {
+      "id": "tooling",
+      "type": "CATEGORY",
+      "properties": {
+        "name": "Security Probe Tooling",
+        "description": "Tools, frameworks, and techniques for building the probe system"
+      },
+      "parent_id": null,
+      "contains": [
+        "tool_aflpp",
+        "tool_libfuzzer",
+        "tool_libaflstar",
+        "tool_fuzi_q",
+        "tool_boofuzz",
+        "tool_cryptofuzz",
+        "tool_rapidcheck",
+        "tool_sanitizers",
+        "tool_oss_fuzz",
+        "tool_libprotobuf_mutator",
+        "tool_proverif",
+        "technique_differential",
+        "technique_stateful",
+        "technique_structure_aware",
+        "reference_ngtcp2_audit",
+        "reference_zen_ai_pentest"
+      ],
+      "metric_level": "L1_SYSTEM",
+      "dimension": "tooling"
+    },
+    {
+      "id": "tool_aflpp",
+      "type": "TOOL",
+      "properties": {
+        "name": "AFL++",
+        "url": "https://aflplus.plus/",
+        "github": "https://github.com/AFLplusplus/AFLplusplus",
+        "type": "greybox_fuzzer",
+        "language": "C/C++",
+        "key_feature": "Persistent mode — 2-20x speed increase, SUT stays alive between iterations",
+        "relevance": "Primary fuzzing engine for wire format and BT parser fuzzing",
+        "integration": "Compatible with libFuzzer harnesses — change compiler from clang++ to afl-clang-fast++",
+        "stateful_support": "AFL_LOOP macro keeps forkserver alive; AFLNet extension adds state-aware network protocol fuzzing",
+        "recommendation": "Use persistent mode with custom BT-encoding-aware mutator for maximum coverage of session-router wire formats"
+      },
+      "parent_id": "tooling",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "tooling"
+    },
+    {
+      "id": "tool_libfuzzer",
+      "type": "TOOL",
+      "properties": {
+        "name": "libFuzzer",
+        "url": "https://llvm.org/docs/LibFuzzer.html",
+        "docs": "https://appsec.guide/docs/fuzzing/c-cpp/libfuzzer/",
+        "type": "coverage_guided_fuzzer",
+        "language": "C/C++",
+        "key_feature": "LLVMFuzzerTestOneInput() is the defacto standard harness interface",
+        "relevance": "Write harnesses once, run with both libFuzzer and AFL++",
+        "integration": "Built into Clang, no external dependencies. Compatible with sanitizers.",
+        "recommendation": "Write all fuzzing harnesses as LLVMFuzzerTestOneInput — this is the universal interface that works with libFuzzer, AFL++, honggfuzz, and OSS-Fuzz"
+      },
+      "parent_id": "tooling",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "tooling"
+    },
+    {
+      "id": "tool_libaflstar",
+      "type": "TOOL",
+      "properties": {
+        "name": "LibAFLstar",
+        "url": "https://github.com/LibAFLstar/LibAFLstar",
+        "paper": "https://link.springer.com/chapter/10.1007/978-3-032-07894-0_6",
+        "venue": "ESORICS 2025",
+        "type": "stateful_protocol_fuzzer",
+        "language": "C/C++",
+        "key_feature": "State-aware queues, state scheduler, partial message sequences, persistent mode",
+        "results": "30x faster than AFLNet/ChatAFL, 1.4x more coverage on FTP/RTSP/HTTP",
+        "relevance": "Purpose-built for stateful protocol fuzzing — session-router is a stateful protocol",
+        "technique": "Takes seed traces + state model as input, generates partial message sequence prefixes to reach specific states before fuzzing",
+        "recommendation": "Best candidate for protocol state machine probes — model session-router states (idle→path_built→session_init→session_active→session_closed) and fuzz transitions"
+      },
+      "parent_id": "tooling",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "tooling"
+    },
+    {
+      "id": "tool_fuzi_q",
+      "type": "TOOL",
+      "properties": {
+        "name": "Fuzi_Q",
+        "url": "https://github.com/private-octopus/fuzi_q",
+        "type": "quic_protocol_fuzzer",
+        "language": "C",
+        "key_feature": "Intercepts QUIC messages BEFORE encryption — fuzzes plaintext, not ciphertext",
+        "technique": "Determines encryption point per connection (initial processed, handshake confirmed, closing), progresses to that state, then fuzzes",
+        "dependency": "Built on Picoquic + Picotls + OpenSSL",
+        "limitation": "Tied to Picoquic stack, not oxen-libquic — needs adaptation",
+        "relevance": "Solves the critical problem: fuzzing encrypted QUIC mostly tests crypto code, not protocol logic. Same approach needed for oxen-libquic.",
+        "recommendation": "Study Fuzi_Q's pre-encryption interception pattern and replicate it for oxen-libquic. Don't use Fuzi_Q directly — adapt the technique."
+      },
+      "parent_id": "tooling",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "tooling"
+    },
+    {
+      "id": "tool_boofuzz",
+      "type": "TOOL",
+      "properties": {
+        "name": "Boofuzz",
+        "url": "https://github.com/jtpereyda/boofuzz",
+        "docs": "https://boofuzz.readthedocs.io/en/stable/",
+        "type": "generation_based_fuzzer",
+        "language": "Python",
+        "key_feature": "Define protocol states (handshake→auth→data), fuzz each state independently. Built-in web UI on port 26000.",
+        "supports": "Serial, ethernet, IP, UDP, TCP",
+        "relevance": "Quick prototyping of probe sequences before building C++ harnesses. Good for black-box testing of upstream binaries.",
+        "recommendation": "Use Boofuzz for initial black-box probing of upstream session-router binary. Graduate to AFL++/LibAFLstar for coverage-guided fuzzing of our rewrite."
+      },
+      "parent_id": "tooling",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "tooling"
+    },
+    {
+      "id": "tool_cryptofuzz",
+      "type": "TOOL",
+      "properties": {
+        "name": "Cryptofuzz",
+        "url": "https://github.com/MozillaSecurity/cryptofuzz",
+        "type": "differential_crypto_fuzzer",
+        "language": "C++",
+        "key_feature": "Differential fuzzing across dozens of crypto libraries. Runs on OSS-Fuzz continuously.",
+        "bugs_found": "~35 bugs in stable releases of major crypto libraries, including CVE-2022-2097 in OpenSSL AES-OCB",
+        "approach": "Same input to multiple implementations, compare outputs. Mutation-driven with code coverage guidance.",
+        "libsodium_status": "libsodium support planned/partial — EverCrypt fork fuzzes against libsodium and BoringSSL",
+        "relevance": "Our rewrite and upstream both use libsodium — differential fuzz our crypto layer against upstream's to find implementation divergence",
+        "recommendation": "Build a differential harness: feed same crypto inputs to both our session_keys/aead/sealed_box and upstream's equivalents. Any output divergence = interop bug or security bug."
+      },
+      "parent_id": "tooling",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "tooling"
+    },
+    {
+      "id": "tool_rapidcheck",
+      "type": "TOOL",
+      "properties": {
+        "name": "RapidCheck",
+        "url": "https://github.com/emil-e/rapidcheck",
+        "type": "property_based_testing",
+        "language": "C++",
+        "key_feature": "QuickCheck for C++ — state facts about code, framework generates random data to falsify. Auto-shrinks to minimal counterexample.",
+        "relevance": "Test cryptographic properties: decrypt(encrypt(m))=m, verify(sign(m, sk), pk)=true, key_derivation is deterministic",
+        "recommendation": "Use RapidCheck for crypto property tests: round-trip encryption, signature verification, key derivation consistency. Catches edge cases that unit tests miss. Integrates with Catch2."
+      },
+      "parent_id": "tooling",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "tooling"
+    },
+    {
+      "id": "tool_sanitizers",
+      "type": "TOOL",
+      "properties": {
+        "name": "Clang Sanitizers (ASan, MSan, UBSan, TSan)",
+        "url": "https://clang.llvm.org/docs/AddressSanitizer.html",
+        "type": "runtime_instrumentation",
+        "language": "C/C++",
+        "sanitizers": {
+          "ASan": "Address Sanitizer — buffer overflows, use-after-free, double-free. Shadow memory based.",
+          "MSan": "Memory Sanitizer — reads from uninitialized memory. Critical for crypto code where uninitialized bytes = key leakage.",
+          "UBSan": "Undefined Behavior Sanitizer — integer overflow, null deref, alignment. Crypto code is full of integer math.",
+          "TSan": "Thread Sanitizer — data races. Our rewrite uses event loop but upstream uses NullMutex."
+        },
+        "constraint": "ASan and MSan are mutually exclusive (conflicting shadow memory). Run separate fuzzing campaigns for each.",
+        "oss_fuzz_stats": "OSS-Fuzz found 13,000+ vulnerabilities and 50,000+ bugs across 1,000 projects using sanitizers + fuzzing",
+        "recommendation": "Every fuzzing harness MUST be compiled with sanitizers. Run three campaigns: (1) AFL++ + ASan + UBSan, (2) AFL++ + MSan, (3) AFL++ + TSan. This catches memory bugs, uninitialized reads, undefined behavior, and races."
+      },
+      "parent_id": "tooling",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "tooling"
+    },
+    {
+      "id": "tool_oss_fuzz",
+      "type": "TOOL",
+      "properties": {
+        "name": "OSS-Fuzz / ClusterFuzzLite",
+        "url": "https://github.com/google/oss-fuzz",
+        "docs": "https://google.github.io/oss-fuzz/",
+        "type": "continuous_fuzzing_infrastructure",
+        "key_feature": "Free continuous fuzzing for open source. Runs libFuzzer + AFL++ + honggfuzz with all sanitizers.",
+        "stats": "13,000+ vulnerabilities, 50,000+ bugs across 1,000 projects",
+        "integration": "Requires Dockerfile, build.sh, project.yaml. Qualification: project must serve critical purpose.",
+        "clusterfuzzlite": "Lightweight version for CI/CD — runs on GitHub Actions, no Google infrastructure needed",
+        "relevance": "Our rewrite is GPL-3.0 open source — qualifies for OSS-Fuzz. Continuous fuzzing catches regressions.",
+        "recommendation": "Phase 1: ClusterFuzzLite in GitHub Actions for our repo (immediate). Phase 2: Apply to OSS-Fuzz for continuous infrastructure (after probe framework stabilizes)."
+      },
+      "parent_id": "tooling",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "tooling"
+    },
+    {
+      "id": "tool_libprotobuf_mutator",
+      "type": "TOOL",
+      "properties": {
+        "name": "libprotobuf-mutator (LPM)",
+        "url": "https://github.com/google/libprotobuf-mutator",
+        "docs": "https://github.com/google/fuzzing/blob/master/docs/structure-aware-fuzzing.md",
+        "type": "structure_aware_mutator",
+        "language": "C++",
+        "key_feature": "Describe input format as protobuf message, LPM generates structured mutations. Integrates with libFuzzer.",
+        "technique": "Define .proto for BT-encoded dicts, LPM mutates fields while preserving structure. Catches bugs in parser edge cases, not just random bytes.",
+        "bitcoin_usage": "Bitcoin Core uses LPM for protocol fuzzing (PR #26975)",
+        "relevance": "BT encoding has a fixed structure (dicts with typed fields). LPM can mutate within that structure to find parser bugs that random fuzzing misses.",
+        "recommendation": "Define session_init.proto, session_accept.proto, path_build.proto, relay_contact.proto. LPM generates valid-ish BT messages with mutated fields — more effective than random bytes for finding parser bugs."
+      },
+      "parent_id": "tooling",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "tooling"
+    },
+    {
+      "id": "tool_proverif",
+      "type": "TOOL",
+      "properties": {
+        "name": "ProVerif / Tamarin",
+        "url": "https://bblanche.gitlabpages.inria.fr/proverif/",
+        "type": "formal_verification",
+        "language": "Domain-specific",
+        "key_feature": "Symbolic analysis of cryptographic protocols — proves security properties or finds attacks",
+        "technique": "Model protocol as process calculus, verify secrecy/authentication/forward-secrecy properties",
+        "recent_work": "2025 ACM CCS paper: formal verification of crypto protocol implementations in Rust using ProVerif + SSProve + F*",
+        "limitation": "Models protocol logic, not implementation bugs. Complementary to fuzzing.",
+        "relevance": "Can formally verify that session-router's key exchange achieves expected security properties (secrecy, authentication, PFS when V2 ships)",
+        "recommendation": "Phase 7 stretch goal — model session key derivation and session handshake in ProVerif. Proves protocol-level correctness that no amount of fuzzing can guarantee."
+      },
+      "parent_id": "tooling",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "tooling"
+    },
+    {
+      "id": "technique_differential",
+      "type": "TECHNIQUE",
+      "properties": {
+        "name": "Differential Testing",
+        "description": "Same input to multiple implementations, compare outputs. Discrepancy = bug in at least one.",
+        "tools": ["Cryptofuzz", "DPIFuzz", "Frankencerts"],
+        "key_insight": "We have TWO implementations of the same protocol — upstream and rewrite. This is the ideal setup for differential testing.",
+        "bugs_found_elsewhere": "Cryptofuzz: ~35 bugs in crypto libraries. Frankencerts: 208 discrepancies in SSL/TLS implementations.",
+        "application": "Feed identical wire messages to both upstream and rewrite. Any behavioral difference (accept vs reject, different output, crash vs clean error) reveals a bug.",
+        "recommendation": "This is our highest-value technique. We have two implementations — use them against each other. Build a differential harness that replays the same BT-encoded messages through both parsers."
+      },
+      "parent_id": "tooling",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "tooling"
+    },
+    {
+      "id": "technique_stateful",
+      "type": "TECHNIQUE",
+      "properties": {
+        "name": "Stateful Protocol Fuzzing",
+        "description": "Fuzz multi-message sequences, not single messages. Must reach correct protocol state before triggering bugs.",
+        "key_insight": "A malicious message must be sent from the right state — fuzzer must provide multiple messages to reach the correct state first",
+        "tools": ["LibAFLstar", "AFLNet", "Boofuzz"],
+        "state_model": "session-router states: idle → path_building → path_built → session_init_sent → session_active → session_closing → closed",
+        "recommendation": "Model session-router's state machine explicitly. Use LibAFLstar's state scheduler to fuzz transitions. Priority: fuzz the session_init→session_active transition (key derivation + sealed box + BT encoding all in one path)."
+      },
+      "parent_id": "tooling",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "tooling"
+    },
+    {
+      "id": "technique_structure_aware",
+      "type": "TECHNIQUE",
+      "properties": {
+        "name": "Structure-Aware Fuzzing",
+        "description": "Mutate within known input structure rather than random bytes. Reaches deeper code paths.",
+        "tools": ["libprotobuf-mutator", "custom LLVMFuzzerCustomMutator"],
+        "key_insight": "Random bytes rarely produce valid BT-encoded dicts. Structure-aware mutators generate valid-ish inputs that pass initial parsing and reach deeper logic.",
+        "application": "BT encoding is structured: dicts have string keys in lexicographic order, typed values, specific field names. A custom mutator that understands BT structure will find bugs that random fuzzing never reaches.",
+        "recommendation": "Write a BT-encoding-aware custom mutator (LLVMFuzzerCustomMutator) that generates syntactically valid BT dicts with fuzzed field values. This is more effective than LPM for bencode because bencode is simpler than protobuf."
+      },
+      "parent_id": "tooling",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "tooling"
+    },
+    {
+      "id": "reference_ngtcp2_audit",
+      "type": "SOURCE",
+      "properties": {
+        "title": "X41 Security Audit of ngtcp2 + nghttp3 (2025)",
+        "url": "https://x41-dsec.de/security/research/job/news/2025/05/22/nghttp3-ngtcp2/",
+        "report_url": "https://x41-dsec.de/static/reports/X41-OSTIF-NG-2025-Audit-Report-Public.pdf",
+        "auditor": "X41 D-Sec, 4 security experts, Feb-Mar 2025",
+        "scope": "nghttp3 v1.7.0, ngtcp2 v1.10.0",
+        "result": "Zero vulnerabilities found. 3 informational findings in ngtcp2 (no security impact).",
+        "findings": [
+          "Stateless reset token checked against retired connections (RFC 9000 violation, informational)",
+          "Timing side channel leaks packet number length (informational, low impact)"
+        ],
+        "relevance": "ngtcp2 is the recommended QUIC backend and was found clean. oxen-libquic is a separate implementation — never audited. The contrast highlights our gap.",
+        "recommendation": "Reference this audit as the gold standard. Our probe system should test everything X41 tested, plus session-router-specific protocol logic."
+      },
+      "parent_id": "tooling",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "tooling"
+    },
+    {
+      "id": "reference_zen_ai_pentest",
+      "type": "SOURCE",
+      "properties": {
+        "title": "Zen-AI-Pentest: AI-Powered Penetration Testing (2026)",
+        "url": "https://www.helpnetsecurity.com/2026/02/11/zen-ai-pentest-open-source-penetration-testing-framework/",
+        "type": "Open source AI-driven pentest framework",
+        "technique": "Autonomous agents + Nmap + Metasploit for recon, scanning, exploitation, reporting",
+        "relevance": "AI-guided probe sequencing could automate probe category prioritization based on intermediate findings",
+        "recommendation": "Interesting but premature for our use case. Manual probe design with AFL++/LibAFLstar is higher value than AI-guided exploration for a protocol we already understand deeply."
+      },
+      "parent_id": "tooling",
+      "contains": [],
+      "metric_level": "L2_COMPONENT",
+      "dimension": "tooling"
+    }
+  ],
+  "edges": [
+    { "from_id": "quarkslab_audit", "to_id": "gap_no_router_audit", "relation": "REVEALS" },
+    { "from_id": "quarkslab_audit", "to_id": "probe_bootstrap_identity", "relation": "INFORMS" },
+    { "from_id": "quarkslab_audit", "to_id": "probe_protocol_state", "relation": "INFORMS" },
+    { "from_id": "session_protocol_v2", "to_id": "gap_v2_proto_change", "relation": "REVEALS" },
+    { "from_id": "session_protocol_v2", "to_id": "gap_no_pfs_v1", "relation": "REVEALS" },
+    { "from_id": "session_protocol_v2", "to_id": "probe_crypto_boundary", "relation": "INFORMS" },
+    { "from_id": "quic_fuzz_paper", "to_id": "probe_quic_transport", "relation": "INFORMS" },
+    { "from_id": "quic_fuzz_paper", "to_id": "gap_bt_parser_untested", "relation": "REVEALS" },
+    { "from_id": "quic_leak_cve", "to_id": "gap_pre_handshake_dos", "relation": "REVEALS" },
+    { "from_id": "quic_leak_cve", "to_id": "probe_resource_exhaustion", "relation": "INFORMS" },
+    { "from_id": "quic_attack_taxonomy", "to_id": "probe_quic_transport", "relation": "INFORMS" },
+    { "from_id": "quic_attack_taxonomy", "to_id": "probe_0rtt_replay", "relation": "INFORMS" },
+    { "from_id": "oxen_libquic_crashes", "to_id": "gap_oxen_libquic_crash", "relation": "REVEALS" },
+    { "from_id": "oxen_libquic_crashes", "to_id": "probe_wire_fuzzing", "relation": "INFORMS" },
+    { "from_id": "tor_deanon_research", "to_id": "probe_traffic_analysis", "relation": "INFORMS" },
+    { "from_id": "detorrent_defense", "to_id": "probe_traffic_analysis", "relation": "INFORMS" },
+    { "from_id": "libsodium_sealed_box", "to_id": "probe_crypto_boundary", "relation": "INFORMS" },
+    { "from_id": "session_arxiv_paper", "to_id": "probe_traffic_analysis", "relation": "INFORMS" },
+    { "from_id": "tor_attacks_repo", "to_id": "probe_traffic_analysis", "relation": "INFORMS" },
+    { "from_id": "probe_wire_fuzzing", "to_id": "probe_crypto_boundary", "relation": "DEPENDS_ON" },
+    { "from_id": "probe_protocol_state", "to_id": "probe_wire_fuzzing", "relation": "DEPENDS_ON" },
+    { "from_id": "probe_quic_transport", "to_id": "probe_wire_fuzzing", "relation": "DEPENDS_ON" },
+    { "from_id": "gap_bt_parser_untested", "to_id": "probe_wire_fuzzing", "relation": "MOTIVATES" },
+    { "from_id": "gap_pre_handshake_dos", "to_id": "probe_resource_exhaustion", "relation": "MOTIVATES" },
+    { "from_id": "gap_oxen_libquic_crash", "to_id": "probe_quic_transport", "relation": "MOTIVATES" },
+    { "from_id": "gap_no_router_audit", "to_id": "probe_wire_fuzzing", "relation": "MOTIVATES" },
+
+    { "from_id": "tool_aflpp", "to_id": "probe_wire_fuzzing", "relation": "IMPLEMENTS" },
+    { "from_id": "tool_aflpp", "to_id": "probe_crypto_boundary", "relation": "IMPLEMENTS" },
+    { "from_id": "tool_libfuzzer", "to_id": "tool_aflpp", "relation": "COMPATIBLE_WITH" },
+    { "from_id": "tool_libfuzzer", "to_id": "tool_oss_fuzz", "relation": "COMPATIBLE_WITH" },
+    { "from_id": "tool_libaflstar", "to_id": "probe_protocol_state", "relation": "IMPLEMENTS" },
+    { "from_id": "tool_fuzi_q", "to_id": "probe_quic_transport", "relation": "INFORMS" },
+    { "from_id": "tool_boofuzz", "to_id": "probe_wire_fuzzing", "relation": "IMPLEMENTS" },
+    { "from_id": "tool_boofuzz", "to_id": "probe_protocol_state", "relation": "IMPLEMENTS" },
+    { "from_id": "tool_cryptofuzz", "to_id": "probe_crypto_boundary", "relation": "IMPLEMENTS" },
+    { "from_id": "tool_rapidcheck", "to_id": "probe_crypto_boundary", "relation": "IMPLEMENTS" },
+    { "from_id": "tool_sanitizers", "to_id": "tool_aflpp", "relation": "AUGMENTS" },
+    { "from_id": "tool_sanitizers", "to_id": "tool_libfuzzer", "relation": "AUGMENTS" },
+    { "from_id": "tool_oss_fuzz", "to_id": "tool_aflpp", "relation": "ORCHESTRATES" },
+    { "from_id": "tool_oss_fuzz", "to_id": "tool_libfuzzer", "relation": "ORCHESTRATES" },
+    { "from_id": "tool_libprotobuf_mutator", "to_id": "probe_wire_fuzzing", "relation": "IMPLEMENTS" },
+    { "from_id": "tool_proverif", "to_id": "probe_crypto_boundary", "relation": "VALIDATES" },
+    { "from_id": "technique_differential", "to_id": "probe_wire_fuzzing", "relation": "APPLIES_TO" },
+    { "from_id": "technique_differential", "to_id": "probe_crypto_boundary", "relation": "APPLIES_TO" },
+    { "from_id": "technique_stateful", "to_id": "probe_protocol_state", "relation": "APPLIES_TO" },
+    { "from_id": "technique_structure_aware", "to_id": "probe_wire_fuzzing", "relation": "APPLIES_TO" },
+    { "from_id": "reference_ngtcp2_audit", "to_id": "probe_quic_transport", "relation": "INFORMS" },
+    { "from_id": "reference_ngtcp2_audit", "to_id": "gap_no_router_audit", "relation": "CONTRASTS" }
+  ]
+}
