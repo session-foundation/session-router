@@ -21,7 +21,9 @@ This study documents the complete process by which a proprietary graph-based ana
 
 ### 1.1 How This Started
 
-The investigation began on a Friday evening (2026-03-28) out of personal curiosity. The principal investigator holds approximately 1/1000 of the total Session token supply and had a general interest in the health of the Session network infrastructure. There was no client engagement, no bounty program, no prior relationship with the Session Foundation. The motivation was purely: *I own tokens in this network — what does the code actually look like?*
+The investigation began on a Friday evening (2026-03-28) out of personal curiosity. The principal investigator originally held approximately 0.3% of the total Oxen token supply. When Session Foundation launched Session on top of Oxen, token dilution reduced that stake to approximately 0.1%. This created both financial frustration and a pointed interest in whether the project justifying that dilution was technically sound.
+
+There was no client engagement, no bounty program, no prior relationship with the Session Foundation. The motivation was direct: *I own tokens in this network, my stake was diluted for this project — is the code worth what it cost me?*
 
 ### 1.2 Initial Reconnaissance
 
@@ -548,17 +550,72 @@ In either case, the GPL rewrite (Phase 1) remains a GPL-3.0 contribution to the 
 **Phase 2 (Go reimplementation):**
 - The AAA specification is TRUGS LLC intellectual property
 - The Go implementation is owned by TRUGS LLC
-- License chosen by owner — no GPL obligation
+- Licensed under Apache 2.0 — permissive, no GPL obligation
 - The upstream GPL code was never seen by the implementer
 - Full disclosure to the upstream project establishes good faith and starts any applicable limitation period
 
 ---
 
-## 12. Conclusion
+## 12. Assessment: State of the Upstream Project
 
-A graph-based analysis system transformed a Friday evening's curiosity into a complete, audited, wire-compatible rewrite of a security-critical network protocol in 3 days. The key enabler was not the AI agent (which wrote the code) but the analysis methodology (which directed what to write). The three-pass approach — structural flow, dependency cycles, hidden complexity — produced understanding that would have required weeks of manual code review. That understanding made the rewrite both possible and correct.
+This section is written plainly.
 
-The upstream codebase is not bad software. It is the natural result of 8 years of development by a changing team under real-world constraints. The circular dependencies emerged gradually. The dead code accumulated one TODO at a time. The god object grew because it was the path of least resistance. The analysis system's value is that it makes the cumulative weight of these decisions visible in a single graph — and that visibility makes informed decisions possible.
+### 12.1 The Code
+
+Session-router is a security-critical application — an onion router handling adversarial network traffic. The codebase has:
+
+- **Zero unit tests on the actively developed namespace.** The `srouter::` namespace where all current development occurs has no test coverage. The existing tests reference types that no longer exist and do not compile.
+- **Zero fuzz coverage.** No fuzz targets for BT message parsing, path build frame handling, DNS parsing, or any other attack surface. An onion router without fuzz testing is an onion router waiting to be exploited.
+- **A security vulnerability acknowledged in a TODO comment.** Path build frames — the most security-critical message in the protocol — lack a MAC. The code says `// TODO FIXME: poly1305 MAC for path build encryption`. This has been there for years.
+- **Exit mode completely broken.** Three separate modules each independently prevent exit functionality. This is a revenue-generating feature that does not work, and no test exists to catch it.
+- **Threading safety by wishful thinking.** All data structures use `NullMutex` — literal no-ops. Correctness depends on an invisible, undocumented, unenforced assumption that all code runs on a single thread. A single callback from the wrong thread causes silent data corruption.
+- **A 1,137-line god object** at the center of 5 circular dependency cycles, making every module untestable in isolation.
+
+This is not a codebase that can be incrementally improved. The architecture prevents it.
+
+### 12.2 The Team
+
+The project had 40+ contributors over 8 years. It now has 2 active maintainers working on a 37,000-line codebase. The QUIC transport migration — replacing the custom wire protocol with oxen-libquic — began in July 2023 and is still not complete nearly 3 years later. The dependency (oxen-libquic) has required multiple emergency version bumps for crashes, 0-RTT bugs, and congestion control issues.
+
+Two developers maintaining 37,000 lines of circular, untested, unfuzzed cryptographic networking code is not sustainable.
+
+### 12.3 The Technology Landscape
+
+It is 2026. AI-assisted development is not experimental — it is the standard for any team that wants to remain competitive. A single person with a graph-based analysis system and an AI agent produced a complete, audited, wire-compatible rewrite in one overnight session. That rewrite has more test coverage, fewer architectural problems, and a cleaner security posture than the original.
+
+The upstream project has not adopted AI-assisted development, automated security auditing, or any of the tooling that makes modern software development tractable at this scale. The result is predictable: a shrinking team falling further behind on a growing codebase with accumulating technical debt and no systematic way to address it.
+
+### 12.4 The Offer
+
+The C++ rewrite is GPL-3.0 and freely available. It is a complete, working, audited replacement for the core protocol layers. It comes with:
+
+- 3,781 lines of clean C++20 (vs 37,000 lines of tangled C++)
+- 105 test cases with 193 assertions (vs ~30 stale, non-compiling tests)
+- Zero circular dependencies (vs 5 cycles)
+- A 6-layer architecture where every layer is independently testable
+- A 1,391-line function-by-function security audit
+- Three audit cycles with all findings resolved
+- Wire compatibility with the existing network
+
+This is what graph-directed analysis produces. The question for the Session Foundation is whether they want to use it.
+
+### 12.5 The Alternative
+
+If the upstream project continues on its current trajectory — two maintainers, no AI tooling, no fuzz testing, accumulating tech debt, broken features, acknowledged security vulnerabilities in TODO comments — the LLARP protocol will be reimplemented in Go under Apache 2.0 by a team that has already demonstrated the ability to understand and rebuild the system from scratch.
+
+The protocol is not copyrightable. The wire format is not copyrightable. The cryptographic operations are standard libsodium primitives. What is copyrightable is the specific C++ expression — and the Go implementation will never see it.
+
+This is not a threat. It is a description of what is already planned, fully documented, and disclosed in good faith.
+
+---
+
+## 13. Conclusion
+
+A graph-based analysis system transformed a Friday evening's frustration into a complete, audited, wire-compatible rewrite of a security-critical network protocol in 3 days. The key enabler was not the AI agent (which wrote the code) but the analysis methodology (which directed what to write). The three-pass approach — structural flow, dependency cycles, hidden complexity — produced understanding that would have required weeks of manual code review. That understanding made the rewrite both possible and correct.
+
+The upstream codebase is the natural result of 8 years of development by a changing team under real-world constraints. The circular dependencies emerged gradually. The dead code accumulated one TODO at a time. The god object grew because it was the path of least resistance. But explanations are not excuses. A security-critical application with zero fuzz testing, acknowledged vulnerabilities in TODO comments, and broken core features is not acceptable — regardless of how it got that way.
+
+The analysis system's value is that it makes the cumulative weight of these decisions visible in a single graph — and that visibility makes informed action possible. This study documents that action.
 
 ---
 
