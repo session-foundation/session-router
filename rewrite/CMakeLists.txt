@@ -192,6 +192,15 @@ if(SR_TESTS)
     target_link_libraries(test_relay_conn PRIVATE sr_relay_conn Catch2::Catch2WithMain)
     add_test(NAME relay_conn COMMAND test_relay_conn)
 
+    # Tests that require QUIC but use loopback (Categories 2-11)
+    if(SR_HAVE_QUIC)
+        add_executable(test_quic_maps
+            test/test_quic_maps.cpp
+        )
+        target_link_libraries(test_quic_maps PRIVATE sr_link sr_relay_conn Catch2::Catch2WithMain)
+        add_test(NAME quic_maps COMMAND test_quic_maps)
+    endif()
+
     add_executable(test_bt
         test/test_bt.cpp
     )
