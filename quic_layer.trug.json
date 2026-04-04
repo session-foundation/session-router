@@ -1,0 +1,229 @@
+{
+  "name": "Session Router QUIC Layer — Upstream Analysis",
+  "id": "quic_layer_analysis",
+  "version": "0.1.0",
+  "type": "ANALYSIS",
+  "description": "TRUG analysis of upstream session-router QUIC transport layer (src/link/). Three-pass graph: structural flow, internal state machines, per-section implementation details. Purpose: inform complete rewrite of Layer 4.",
+  "meta": {
+    "created": "2026-04-03",
+    "source_files": [
+      "src/link/endpoint.hpp (327 lines)",
+      "src/link/endpoint.cpp (1029 lines)",
+      "src/link/link_manager.hpp (179 lines)",
+      "src/link/link_manager.cpp (1432 lines)",
+      "src/link/connection.hpp (29 lines)",
+      "src/link/connection.cpp (18 lines)"
+    ],
+    "total_lines": 3014,
+    "issue": "TRUGS-DEVELOPMENT#1282",
+    "parent_issue": "TRUGS-DEVELOPMENT#1281",
+    "branch": "SECURITY"
+  },
+
+  "nodes": [
+
+    {"id": "root", "type": "SYSTEM", "parent_id": null, "contains": ["subsys_endpoint", "subsys_manager", "subsys_connection"], "properties": {"name": "QUIC Transport Layer", "namespace": "srouter::link", "description": "Two classes + one struct. Endpoint owns QUIC connections and lifecycle. Manager owns command dispatch and protocol message handling. Connection wraps a quic::Connection + datagrams + control stream."}},
+
+    {"id": "subsys_endpoint", "type": "MODULE", "parent_id": "root", "contains": ["ep_constructor", "ep_connection_maps", "ep_tickers", "ep_conn_established", "ep_conn_closed", "ep_make_control", "ep_send_datagram", "ep_send_command", "ep_special_connect", "ep_shutdown", "ep_queries"], "properties": {"name": "Endpoint", "file": "endpoint.hpp / endpoint.cpp", "lines": 1356, "role": "Owns the QUIC event loop, TLS credentials, connection maps, tickers, and all connection lifecycle logic. The core of the transport layer."}},
+
+    {"id": "subsys_manager", "type": "MODULE", "parent_id": "root", "contains": ["mgr_register_commands", "mgr_register_bootstrap", "mgr_gossip", "mgr_path_handlers", "mgr_session_handlers", "mgr_connect_keepalive", "mgr_stop"], "properties": {"name": "Manager", "file": "link_manager.hpp / link_manager.cpp", "lines": 1611, "role": "Command dispatch and protocol message handling. Registers BT stream handlers on control streams. Routes path_control, session_control, gossip_rc, fetch_rcs, publish_cc, find_cc. Bridges QUIC transport to protocol logic."}},
+
+    {"id": "subsys_connection", "type": "MODULE", "parent_id": "root", "contains": [], "properties": {"name": "Connection", "file": "connection.hpp / connection.cpp", "lines": 47, "role": "Simple wrapper: quic::Connection + datagrams handle + BTRequestStream control stream. close() delegates to conn->close_connection(errcode)."}},
+
+
+    {"id": "ep_constructor", "type": "FUNCTION", "parent_id": "subsys_endpoint", "contains": [], "properties": {"name": "Endpoint::Endpoint(Manager&)", "file": "endpoint.cpp:72-187", "description": "Constructs QUIC endpoint. Creates event loop, TLS creds (Ed25519 keys for relays, unauthenticated for clients), configures ALPNs, datagrams (2M queue, ACTIVE splitting), 0-RTT callbacks, key verification callback, and calls endpoint->listen()."}},
+
+    {"id": "ep_connection_maps", "type": "DATA", "parent_id": "subsys_endpoint", "contains": ["map_relay_conns", "map_relay_bidir", "map_pending_outbound", "map_pending_dead", "map_client_conns", "map_inbound_clients"], "properties": {"name": "Connection Storage", "description": "Six separate maps tracking connections by type, direction, and lifecycle state. This is the core data model."}},
+
+    {"id": "map_relay_conns", "type": "DATA", "parent_id": "ep_connection_maps", "contains": [], "properties": {"name": "relay_conns", "cpp_type": "unordered_map<RouterID, relay_conn>", "description": "Established relay-to-relay connections. relay_conn stores BOTH inbound and outbound with winner selection. Relay only.", "line": "endpoint.hpp:97"}},
+
+    {"id": "map_relay_bidir", "type": "DATA", "parent_id": "ep_connection_maps", "contains": [], "properties": {"name": "relay_bidir", "cpp_type": "unordered_map<RouterID, sys_ms>", "description": "Tracks relays with BOTH directions connected. Value = timestamp when latest bidirectional connection stored. Used by redundancy ticker to know when REDUNDANT_LINGER has passed.", "line": "endpoint.hpp:103"}},
+
+    {"id": "map_pending_outbound", "type": "DATA", "parent_id": "ep_connection_maps", "contains": [], "properties": {"name": "pending_outbound", "cpp_type": "unordered_map<RouterID, shared_ptr<Connection>>", "description": "Not-yet-established outbound connections. On establishment, moved to relay_conns (relays) or client_conns (clients). On failure, removed.", "line": "endpoint.hpp:108"}},
+
+    {"id": "map_pending_dead", "type": "DATA", "parent_id": "ep_connection_maps", "contains": [], "properties": {"name": "pending_dead", "cpp_type": "unordered_map<RouterID, steady_clock::time_point>", "description": "Dead/deregistered relay IDs with timestamp of when first noticed. After DEREGGED_LINGER (30min), connection closed. Can be 'resurrected' if relay re-registers.", "line": "endpoint.hpp:113"}},
+
+    {"id": "map_client_conns", "type": "DATA", "parent_id": "ep_connection_maps", "contains": [], "properties": {"name": "client_conns", "cpp_type": "unordered_map<RouterID, shared_ptr<Connection>>", "description": "Established client-to-relay connections. Client only (outbound edge connections).", "line": "endpoint.hpp:117"}},
+
+    {"id": "map_inbound_clients", "type": "DATA", "parent_id": "ep_connection_maps", "contains": [], "properties": {"name": "inbound_clients", "cpp_type": "unordered_map<ConnectionID, shared_ptr<Connection>>", "description": "Inbound client connections. Relay only. Keyed by QUIC ConnectionID (not RouterID, because clients may be unauthenticated).", "line": "endpoint.hpp:121"}},
+
+
+    {"id": "relay_conn_struct", "type": "DATA", "parent_id": "subsys_endpoint", "contains": [], "properties": {"name": "relay_conn struct", "file": "endpoint.hpp:49-79", "description": "Bidirectional connection pair. Stores inbound + outbound shared_ptr<Connection>. Winner determined by: inbound_wins = (their_rid < our_rid). set_conn() replaces direction and updates preferred conn pointer. close_redundant() closes the loser direction with CONN_CLOSE_REDUNDANT=6.", "fields": ["bool inbound_wins", "shared_ptr<Connection> inbound", "shared_ptr<Connection> outbound", "Connection* conn (preferred, raw ptr)"], "methods": ["set_conn(c, is_inbound)", "close(direction_inbound, errcode)", "close_all(errcode)", "close_redundant()"]}},
+
+
+    {"id": "ep_tickers", "type": "SUBSYSTEM", "parent_id": "subsys_endpoint", "contains": ["ticker_redundancy", "ticker_dereg"], "properties": {"name": "Tickers", "description": "Two periodic timers managing connection lifecycle. Relay only. Started via start_tickers()."}},
+
+    {"id": "ticker_redundancy", "type": "FUNCTION", "parent_id": "ep_tickers", "contains": [], "properties": {"name": "close_redundant()", "file": "endpoint.cpp:213-229", "interval": "REDUNDANT_LINGER (20s)", "description": "Iterates relay_bidir. For entries older than REDUNDANT_LINGER, calls relay_conn::close_redundant() which closes the loser direction (CONN_CLOSE_REDUNDANT=6). Removes from relay_bidir after closing."}},
+
+    {"id": "ticker_dereg", "type": "FUNCTION", "parent_id": "ep_tickers", "contains": [], "properties": {"name": "check_deregged_conns()", "file": "endpoint.cpp:231-286", "interval": "1 minute", "description": "Two phases: (1) Close connections to relays that have been dead > DEREGGED_LINGER (30min) — close_all, erase from relay_conns, pending_outbound, relay_bidir. Can resurrect if re-registered. (2) Scan relay_conns for newly unregistered relays, add to pending_dead with current timestamp."}},
+
+
+    {"id": "ep_conn_established", "type": "FUNCTION", "parent_id": "subsys_endpoint", "contains": [], "properties": {"name": "on_conn_established()", "file": "endpoint.cpp:772-799", "description": "QUIC callback when connection completes handshake. For inbound: creates control stream via make_control() BEFORE transferring to router loop (critical — stream must be queued before data arrives). Transfers to router._jq->call() then dispatches to on_inbound_conn() or on_outbound_conn(). Uses weak_from_this() to handle connection death during transfer."}},
+
+    {"id": "ep_on_inbound", "type": "FUNCTION", "parent_id": "subsys_endpoint", "contains": [], "properties": {"name": "on_inbound_conn()", "file": "endpoint.cpp:660-708", "description": "Handles established inbound connections. Routes by ALPN: BOOTSTRAP_ALPN → log and return (untracked). RELAY_ALPN → create relay_conn with winner=(their_rid < our_rid), set_conn(inbound=true), add to relay_bidir if outbound exists. CLIENT_ALPN → store in inbound_clients by ConnectionID."}},
+
+    {"id": "ep_on_outbound", "type": "FUNCTION", "parent_id": "subsys_endpoint", "contains": [], "properties": {"name": "on_outbound_conn()", "file": "endpoint.cpp:710-770", "description": "Handles established outbound connections. Moves from pending_outbound to: relay_conns (relay, set_conn outbound=false, add to relay_bidir if inbound exists) or client_conns (client). Calls router.on_edge_conn_change() for clients."}},
+
+    {"id": "ep_conn_closed", "type": "FUNCTION", "parent_id": "subsys_endpoint", "contains": [], "properties": {"name": "on_conn_closed()", "file": "endpoint.cpp:803-961", "description": "QUIC callback when connection closes. Uses canary shared_ptr for lifetime safety — if Endpoint destroyed, early returns. Routes by ALPN: BOOTSTRAP → return (untracked). RELAY → find in relay_conns, match by reference_id to determine direction, close that direction, erase relay_conn if both gone, also check pending_outbound. CLIENT → relay: erase from inbound_clients. client: erase from client_conns. Empty ALPN (failed before negotiation) → erase from pending_outbound. Calls on_edge_conn_change() for clients."}},
+
+    {"id": "ep_make_control", "type": "FUNCTION", "parent_id": "subsys_endpoint", "contains": [], "properties": {"name": "make_control()", "file": "endpoint.cpp:612-657", "description": "Creates BTRequestStream on a connection. Inbound: queue_incoming_stream (stream ID must be 0). Outbound: open_stream with stream_notify. Determines remote identity: RELAY_ALPN uses RouterID from key, others use ConnectionID. Calls manager.register_commands() (or register_bootstrap_commands for BOOTSTRAP_ALPN). Returns shared_ptr<BTRequestStream>."}},
+
+    {"id": "ep_send_datagram", "type": "FUNCTION", "parent_id": "subsys_endpoint", "contains": [], "properties": {"name": "send_datagram()", "file": "endpoint.cpp:582-610", "description": "Two overloads: by RouterID (relay) or ConnectionID (client). Returns bool. Does NOT initiate new connections — drops if not connected. Uses get_relay_conn() or inbound_clients lookup. Checks is_stopping."}},
+
+    {"id": "ep_send_command", "type": "FUNCTION", "parent_id": "subsys_endpoint", "contains": [], "properties": {"name": "send_command()", "file": "endpoint.cpp:507-580", "description": "Four overloads: by RelayContact, RouterID, ConnectionID, or variant. RelayContact version DOES initiate new connection via control_stream_for(). RouterID version looks up RC in NodeDB. ConnectionID version uses inbound_clients. All wrap response_handler to transfer execution to router loop. Returns bool (except RelayContact version returns void)."}},
+
+    {"id": "ep_ctrl_stream_impl", "type": "FUNCTION", "parent_id": "subsys_endpoint", "contains": [], "properties": {"name": "ctrl_stream_impl()", "file": "endpoint.cpp:460-493", "description": "Core connection-or-create logic. If relay connected: return (true, existing control stream). If not: create in pending_outbound with endpoint->connect() + make_control(), return (false, new control stream). CRITICAL: this is where outbound connections are initiated. Sets keep_alive and idle_timeout based on is_service_node."}},
+
+    {"id": "ep_special_connect", "type": "FUNCTION", "parent_id": "subsys_endpoint", "contains": [], "properties": {"name": "bootstrap_connect() / testing_client_connect()", "file": "endpoint.cpp:963-1027", "description": "Special untracked connections. Both use special_connect_impl() which: connects with no-creds, bootstrap idle timeout (10s), custom ALPN, own open/close callbacks (not the main ones). Returns (Connection, BTRequestStream) pair. NOT stored in any connection map. Short-lived, no keep-alive."}},
+
+    {"id": "ep_shutdown", "type": "FUNCTION", "parent_id": "subsys_endpoint", "contains": [], "properties": {"name": "shutdown()", "file": "endpoint.cpp:377-402", "description": "Ordered teardown: close_all on each relay_conn → clear relay_conns → clear relay_bidir → close each pending_outbound → close each client_conn → close each inbound_client → reset endpoint → reset loop. Order matters: connections must close before endpoint, endpoint before loop."}},
+
+    {"id": "ep_queries", "type": "FUNCTION", "parent_id": "subsys_endpoint", "contains": [], "properties": {"name": "Query functions", "file": "endpoint.cpp:198-458", "description": "get_relay_conn(), get_client_conn(), connected_to_relay(), get_current_relays(), num_relay_conns(), relay_connection_counts(), client_connection_counts(), unique_edge_range(), for_each_relay_conn(). Most use router._jq->call_get() for thread-safe access. for_each_relay_conn() asserts inside router loop."}},
+
+
+    {"id": "ep_key_verify", "type": "FUNCTION", "parent_id": "subsys_endpoint", "contains": [], "properties": {"name": "Key verification callback", "file": "endpoint.cpp:130-181", "description": "TLS client key verification. Non-relay ALPNs: accept if no key or valid size. RELAY_ALPN: MUST provide RouterID-sized key, must not be our own ID, must be registered in NodeDB. CRITICAL WARNING in code: must NOT call_get into router loop (deadlock risk — router call_gets into endpoint loop)."}},
+
+    {"id": "ep_0rtt", "type": "FUNCTION", "parent_id": "subsys_endpoint", "contains": [], "properties": {"name": "0-RTT callbacks", "file": "endpoint.cpp:102-128", "description": "Two callbacks registered on tls_creds. Store callback: on new 0-RTT ticket, store in NodeDB via store_0rtt(rid, data, expiry). Extract callback: on reconnect, retrieve from NodeDB via extract_0rtt(rid). Relay inbound: enable_inbound_0rtt(0s, 48h)."}},
+
+
+    {"id": "mgr_register_commands", "type": "FUNCTION", "parent_id": "subsys_manager", "contains": [], "properties": {"name": "register_commands()", "file": "link_manager.cpp:69-123", "description": "Registers BT stream handlers on control stream. ALL connections get: path_control, session_control. Relay-only additions: path_build, fetch_rcs, gossip_rc, publish_cc, find_cc, ping. ALL handlers transfer to router loop via router._jq->call(). WARNING in code: can be called from network OR router loop thread."}},
+
+    {"id": "mgr_register_bootstrap", "type": "FUNCTION", "parent_id": "subsys_manager", "contains": [], "properties": {"name": "register_bootstrap_commands()", "file": "link_manager.cpp:125-132", "description": "Registers single handler: bfetch_rcs. Bootstrap connections only support this one command. Server-side only (client doesn't register anything on bootstrap)."}},
+
+    {"id": "mgr_gossip", "type": "FUNCTION", "parent_id": "subsys_manager", "contains": [], "properties": {"name": "gossip_rc() / handle_gossip_rc()", "file": "link_manager.cpp:160-202", "description": "RC propagation. gossip_rc() sends to all relay peers except origin and sender. handle_gossip_rc() validates incoming RC, verifies+stores via NodeDB, re-gossips if new/significantly updated."}},
+
+    {"id": "mgr_path_handlers", "type": "FUNCTION", "parent_id": "subsys_manager", "contains": [], "properties": {"name": "Path request handlers", "file": "link_manager.hpp:134-141", "description": "Six path request types routed via path_requests static map: publish_cc, find_cc, fetch_rcs, fetch_rids, resolve_sns, path_ping. Plus handle_path_build (path construction) and handle_path_latency."}},
+
+    {"id": "mgr_session_handlers", "type": "FUNCTION", "parent_id": "subsys_manager", "contains": [], "properties": {"name": "Session handlers", "file": "link_manager.hpp:148-173", "description": "handle_session_message() dispatches datagrams. handle_session_handshake() processes init/accept/switch. handle_session_data() and handle_session_control() handle payload decryption and routing. handle_path_session_control() bridges path to session."}},
+
+    {"id": "mgr_connect_keepalive", "type": "FUNCTION", "parent_id": "subsys_manager", "contains": [], "properties": {"name": "connect_to_keep_alive()", "file": "link_manager.cpp:146-158", "description": "Connects to N random relays from NodeDB, filtering out already-connected (including pending). Used to maintain relay mesh connectivity."}},
+
+    {"id": "mgr_stop", "type": "FUNCTION", "parent_id": "subsys_manager", "contains": [], "properties": {"name": "stop()", "file": "link_manager.cpp:136-144", "description": "Sets is_stopping atomic flag (checked by send operations). Calls endpoint.shutdown() via router._jq->call_get() — synchronous, waits for completion. Destructor calls stop()."}}
+  ],
+
+  "edges": [
+
+    {"from_id": "subsys_manager", "to_id": "subsys_endpoint", "relation": "OWNS", "properties": {"description": "Manager contains Endpoint as member. Endpoint constructor takes Manager&."}},
+    {"from_id": "subsys_endpoint", "to_id": "subsys_connection", "relation": "USES", "properties": {"description": "Connection wraps quic::Connection + datagrams + control_stream. Stored in all connection maps."}},
+
+    {"from_id": "ep_constructor", "to_id": "ep_key_verify", "relation": "CONFIGURES", "properties": {"description": "Constructor registers key verify callback on tls_creds. Relay only."}},
+    {"from_id": "ep_constructor", "to_id": "ep_0rtt", "relation": "CONFIGURES", "properties": {"description": "Constructor registers 0-RTT store/extract callbacks. Both relay and client."}},
+
+    {"from_id": "ep_conn_established", "to_id": "ep_on_inbound", "relation": "DISPATCHES", "properties": {"description": "Inbound connections dispatched to on_inbound_conn() after router loop transfer."}},
+    {"from_id": "ep_conn_established", "to_id": "ep_on_outbound", "relation": "DISPATCHES", "properties": {"description": "Outbound connections dispatched to on_outbound_conn() after router loop transfer."}},
+    {"from_id": "ep_conn_established", "to_id": "ep_make_control", "relation": "CALLS", "properties": {"description": "For inbound: make_control() called BEFORE router loop transfer (critical ordering)."}},
+
+    {"from_id": "ep_on_inbound", "to_id": "map_relay_conns", "relation": "WRITES", "properties": {"description": "RELAY_ALPN connections stored in relay_conns via relay_conn::set_conn(inbound=true)."}},
+    {"from_id": "ep_on_inbound", "to_id": "map_relay_bidir", "relation": "WRITES", "properties": {"description": "If outbound already exists for this relay, adds to relay_bidir with current timestamp."}},
+    {"from_id": "ep_on_inbound", "to_id": "map_inbound_clients", "relation": "WRITES", "properties": {"description": "CLIENT_ALPN connections stored in inbound_clients by ConnectionID."}},
+
+    {"from_id": "ep_on_outbound", "to_id": "map_pending_outbound", "relation": "READS_DELETES", "properties": {"description": "Finds and removes from pending_outbound."}},
+    {"from_id": "ep_on_outbound", "to_id": "map_relay_conns", "relation": "WRITES", "properties": {"description": "Relay: stores in relay_conns via relay_conn::set_conn(inbound=false)."}},
+    {"from_id": "ep_on_outbound", "to_id": "map_relay_bidir", "relation": "WRITES", "properties": {"description": "If inbound already exists, adds to relay_bidir."}},
+    {"from_id": "ep_on_outbound", "to_id": "map_client_conns", "relation": "WRITES", "properties": {"description": "Client: stores in client_conns."}},
+
+    {"from_id": "ep_conn_closed", "to_id": "map_relay_conns", "relation": "READS_DELETES", "properties": {"description": "RELAY_ALPN: finds by RouterID, matches direction by reference_id, closes direction. Erases relay_conn if both gone."}},
+    {"from_id": "ep_conn_closed", "to_id": "map_relay_bidir", "relation": "DELETES", "properties": {"description": "Erases from relay_bidir on any relay connection close."}},
+    {"from_id": "ep_conn_closed", "to_id": "map_pending_outbound", "relation": "READS_DELETES", "properties": {"description": "Checks pending_outbound if not found in relay_conns (relay) or for empty-ALPN outbound (failed pre-negotiation)."}},
+    {"from_id": "ep_conn_closed", "to_id": "map_client_conns", "relation": "READS_DELETES", "properties": {"description": "CLIENT_ALPN on client: erases from client_conns, matching by reference_id."}},
+    {"from_id": "ep_conn_closed", "to_id": "map_inbound_clients", "relation": "READS_DELETES", "properties": {"description": "CLIENT_ALPN on relay: erases from inbound_clients by ConnectionID."}},
+
+    {"from_id": "ep_ctrl_stream_impl", "to_id": "map_pending_outbound", "relation": "WRITES", "properties": {"description": "Creates new connection in pending_outbound if not already connected or pending."}},
+    {"from_id": "ep_ctrl_stream_impl", "to_id": "ep_make_control", "relation": "CALLS", "properties": {"description": "Creates control stream on new outbound connection."}},
+
+    {"from_id": "ticker_redundancy", "to_id": "map_relay_bidir", "relation": "READS_DELETES", "properties": {"description": "Iterates relay_bidir, closes redundant for entries past REDUNDANT_LINGER."}},
+    {"from_id": "ticker_redundancy", "to_id": "map_relay_conns", "relation": "READS", "properties": {"description": "Finds relay_conn to call close_redundant() on."}},
+
+    {"from_id": "ticker_dereg", "to_id": "map_pending_dead", "relation": "READS_WRITES_DELETES", "properties": {"description": "Checks timestamps, removes expired dead entries, adds newly unregistered relays."}},
+    {"from_id": "ticker_dereg", "to_id": "map_relay_conns", "relation": "READS_DELETES", "properties": {"description": "Closes and erases connections to relays dead > DEREGGED_LINGER."}},
+    {"from_id": "ticker_dereg", "to_id": "map_pending_outbound", "relation": "READS_DELETES", "properties": {"description": "Also cleans pending connections to dead relays."}},
+    {"from_id": "ticker_dereg", "to_id": "map_relay_bidir", "relation": "DELETES", "properties": {"description": "Erases bidir tracking for dead relays."}},
+
+    {"from_id": "ep_make_control", "to_id": "mgr_register_commands", "relation": "CALLS", "properties": {"description": "Registers protocol handlers on control stream. Non-bootstrap connections."}},
+    {"from_id": "ep_make_control", "to_id": "mgr_register_bootstrap", "relation": "CALLS", "properties": {"description": "Registers bfetch_rcs handler on bootstrap connections. Server-side only."}},
+
+    {"from_id": "ep_send_command", "to_id": "ep_ctrl_stream_impl", "relation": "CALLS", "properties": {"description": "RelayContact overload uses control_stream_for() which calls ctrl_stream_impl()."}},
+
+    {"from_id": "ep_shutdown", "to_id": "map_relay_conns", "relation": "CLEARS", "properties": {"description": "Shutdown closes all relay connections first."}},
+    {"from_id": "ep_shutdown", "to_id": "map_pending_outbound", "relation": "CLEARS", "properties": {"description": "Then pending outbound."}},
+    {"from_id": "ep_shutdown", "to_id": "map_client_conns", "relation": "CLEARS", "properties": {"description": "Then client connections."}},
+    {"from_id": "ep_shutdown", "to_id": "map_inbound_clients", "relation": "CLEARS", "properties": {"description": "Then inbound clients. Then endpoint. Then loop."}},
+
+    {"from_id": "mgr_gossip", "to_id": "ep_send_command", "relation": "USES", "properties": {"description": "gossip_rc uses for_each_relay_conn + control_stream->command directly (no send_command wrapper)."}},
+    {"from_id": "mgr_path_handlers", "to_id": "ep_send_command", "relation": "USES", "properties": {"description": "Path handlers like publish_cc forward via endpoint.send_command()."}},
+    {"from_id": "mgr_connect_keepalive", "to_id": "ep_ctrl_stream_impl", "relation": "USES", "properties": {"description": "Uses ensure_connection() which calls ctrl_stream_impl()."}},
+    {"from_id": "mgr_stop", "to_id": "ep_shutdown", "relation": "CALLS", "properties": {"description": "stop() calls endpoint.shutdown() via router._jq->call_get()."}}
+  ],
+
+  "analysis": {
+    "constants": {
+      "REDUNDANT_LINGER": "20s — time before closing redundant bidirectional connection",
+      "DEREGGED_LINGER": "30min — time before closing connection to deregistered relay",
+      "CONN_CLOSE_REDUNDANT": "6 — error code for redundant connection close",
+      "RELAY_OUTBOUND_KEEP_ALIVE": "10s",
+      "RELAY_OUTBOUND_IDLE_TIMEOUT": "33s (3x keep_alive + 3s)",
+      "CLIENT_KEEP_ALIVE": "20s",
+      "CLIENT_IDLE_TIMEOUT": "63s (3x keep_alive + 3s)",
+      "RELAY_INBOUND_IDLE_TIMEOUT": "max(CLIENT, RELAY) = 63s",
+      "BOOTSTRAP_IDLE_TIMEOUT": "10s — no keep_alive"
+    },
+
+    "threading_model": {
+      "network_loop": "quic::Loop — owns QUIC endpoint, runs callbacks. Endpoint.loop member.",
+      "router_loop": "router._jq (JobQueue) — owns all connection maps and protocol state.",
+      "pattern": "Callbacks fire in network loop → transfer to router loop via router._jq->call(). Query functions use router._jq->call_get() for synchronous reads.",
+      "deadlock_risk": "Key verify callback MUST NOT call_get into router loop (documented in code). Router frequently call_gets into endpoint loop. Bidirectional call_get = deadlock.",
+      "canary": "Endpoint destructor sets *canary = false. on_conn_closed lambda checks canary before accessing this. Prevents use-after-free during shutdown."
+    },
+
+    "connection_lifecycle": {
+      "outbound_relay": "ctrl_stream_impl() creates in pending_outbound → on_conn_established() transfers to router loop → on_outbound_conn() moves to relay_conns + adds to relay_bidir if inbound exists → redundancy_ticker closes loser after REDUNDANT_LINGER",
+      "inbound_relay": "QUIC callback → on_conn_established() creates control stream FIRST then transfers → on_inbound_conn() creates relay_conn with winner=(their_rid < our_rid), stores inbound, adds to relay_bidir if outbound exists",
+      "outbound_client": "ctrl_stream_impl() creates in pending_outbound → on_outbound_conn() moves to client_conns → on_edge_conn_change()",
+      "inbound_client": "on_inbound_conn() stores in inbound_clients by ConnectionID",
+      "bootstrap": "special_connect_impl() — untracked, own callbacks, no keep_alive, 10s timeout, not stored in any map",
+      "death": "on_conn_closed routes by ALPN → cleans from appropriate map → erases relay_bidir → erases pending_outbound if present",
+      "deregistration": "check_deregged_conns() adds to pending_dead → 30min later closes and erases everything"
+    },
+
+    "alpn_routing": {
+      "Session_Router_R": {"direction": "relay-to-relay", "storage": "relay_conns", "keep_alive": "10s", "idle": "33s", "key_required": true, "key_must_be_registered": true, "commands": "path_control, session_control, path_build, fetch_rcs, gossip_rc, publish_cc, find_cc, ping"},
+      "Session_Router_C": {"direction": "client-to-relay", "storage_relay": "inbound_clients (by CID)", "storage_client": "client_conns (by RID)", "keep_alive": "20s", "idle": "63s", "key_required": false, "commands": "path_control, session_control"},
+      "Session_Router_BS": {"direction": "bootstrap", "storage": "NONE (untracked)", "keep_alive": "none", "idle": "10s", "key_required": false, "commands": "bfetch_rcs only"}
+    },
+
+    "winner_selection": {
+      "algorithm": "inbound_wins = (their_rid < our_rid)",
+      "symmetry": "Both sides compute the same answer. If A < B: A's inbound (from B) wins on A's side, B's outbound (to A) wins on B's side → same physical connection wins on both sides.",
+      "timing": "Winner takes effect immediately on set_conn(). Loser kept alive for REDUNDANT_LINGER (20s) to drain in-flight messages. Then closed with CONN_CLOSE_REDUNDANT=6."
+    },
+
+    "critical_ordering": {
+      "inbound_control_stream": "make_control() MUST be called in network loop callback BEFORE transferring to router loop. If deferred, incoming stream data could arrive and create a plain Stream instead of BTRequestStream. This is the most subtle bug risk in the entire layer.",
+      "shutdown_order": "close connections → clear maps → reset endpoint → reset loop. Loop must outlive endpoint. Endpoint must outlive connections."
+    },
+
+    "rewrite_implications": {
+      "must_preserve": [
+        "Six separate connection maps (not a flat map)",
+        "relay_conn bidirectional struct with winner selection",
+        "Pending outbound tracking with dedup",
+        "ALPN-based routing with per-type timeouts",
+        "Key verification on relay ALPN (NodeDB registered check)",
+        "Canary or equivalent lifetime safety in callbacks",
+        "Control stream creation before router loop transfer (inbound)",
+        "Bootstrap connections untracked with own callbacks",
+        "Ordered shutdown sequence",
+        "Two tickers: redundancy (20s) and deregistration (30min)",
+        "Response handler wrapping for router loop transfer",
+        "0-RTT ticket store/extract via NodeDB"
+      ],
+      "can_simplify": [
+        "Threading: Go goroutines + channels replace call_get/call pattern entirely",
+        "Canary: Go GC eliminates use-after-free concern",
+        "Connection struct: Go interface instead of shared_ptr wrapping",
+        "Static map of path_requests: Go function map or switch"
+      ]
+    }
+  }
+}

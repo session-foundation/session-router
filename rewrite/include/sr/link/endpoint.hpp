@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -19,6 +20,15 @@ namespace sr::link
         std::string_view method,
         std::span<const std::byte> payload,
         std::function<void(std::vector<std::byte>)> respond)>;
+
+    // Key verification callback. Called during TLS handshake for inbound relay connections.
+    // Returns true to accept the connection, false to reject.
+    // Parameters: remote RouterID, selected ALPN string.
+    using KeyVerifyCallback = std::function<bool(const sr::contact::RouterID& rid, std::string_view alpn)>;
+
+    // 0-RTT ticket callbacks for session resumption
+    using TicketStoreCallback = std::function<void(const sr::contact::RouterID& rid, std::vector<unsigned char> ticket)>;
+    using TicketExtractCallback = std::function<std::optional<std::vector<unsigned char>>(const sr::contact::RouterID& rid)>;
 
     // Endpoint wraps oxen-libquic for session-router transport.
     // Manages QUIC connections to relay nodes.
@@ -50,13 +60,39 @@ namespace sr::link
         void on_datagram(DatagramHandler handler);
         void on_request(BTStreamHandler handler);
 
+        // Set key verification callback for inbound connections.
+        // Must be called before listen().
+        // If not set, all connections are accepted (INSECURE — for testing only).
+        void set_key_verify(KeyVerifyCallback callback);
+
+        // Set 0-RTT ticket callbacks for session resumption.
+        // Must be called before listen().
+        void set_0rtt_callbacks(TicketStoreCallback store, TicketExtractCallback extract);
+
         // Connection management
         bool is_connected(const sr::contact::RouterID& to) const;
         size_t connection_count() const;
         std::vector<sr::contact::RouterID> connected_peers() const;
 
+        // Returns the local port this endpoint is listening on.
+        // Only valid after listen() has been called.
+        uint16_t local_port() const;
+
+        // Returns whether this endpoint is in relay mode
+        bool is_relay() const { return _is_relay; }
+
+        // Returns the ALPN string for a connection, or empty if not connected
+        std::string connection_alpn(const sr::contact::RouterID& rid) const;
+
+        // Returns whether a connection is inbound
+        bool is_inbound_connection(const sr::contact::RouterID& rid) const;
+
         // Close a connection
         void disconnect(const sr::contact::RouterID& rid);
+
+        // Start periodic lifecycle tickers (relay only).
+        // Must be called after listen().
+        void start_tickers();
 
         // Shut down the endpoint
         void close();
@@ -65,6 +101,10 @@ namespace sr::link
         bool _is_relay;
         DatagramHandler _dgram_handler;
         BTStreamHandler _bt_handler;
+        KeyVerifyCallback _key_verify;
+        TicketStoreCallback _ticket_store;
+        TicketExtractCallback _ticket_extract;
+        sr::contact::RouterID _our_rid;  // Our RouterID, set during listen()
 
         // oxen-quic internals (opaque — implementation depends on quic library)
         struct Impl;
