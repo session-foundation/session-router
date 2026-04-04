@@ -55,6 +55,10 @@ namespace sr::link
         size_t connection_count() const;
         std::vector<sr::contact::RouterID> connected_peers() const;
 
+        // Returns the local port this endpoint is listening on.
+        // Only valid after listen() has been called.
+        uint16_t local_port() const;
+
         // Close a connection
         void disconnect(const sr::contact::RouterID& rid);
 

@@ -214,6 +214,13 @@ namespace sr::link
         }
     }
 
+    uint16_t Endpoint::local_port() const
+    {
+        if (_impl && _impl->ep)
+            return _impl->ep->local().port();
+        return 0;
+    }
+
     void Endpoint::close()
     {
         if (_impl && _impl->ep)

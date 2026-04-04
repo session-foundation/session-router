@@ -79,8 +79,8 @@ namespace sr::test
                 std::span<const std::byte, 32>{keys_b.sk.data(), 32},
                 std::span<const std::byte, 32>{keys_b.pk.data(), 32});
 
-            // TODO: read actual assigned ports from endpoint
-            // For now, tests that need ports must set them after listen()
+            port_a = endpoint_a.local_port();
+            port_b = endpoint_b.local_port();
         }
 
         // Connect A → B

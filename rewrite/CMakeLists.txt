@@ -199,6 +199,12 @@ if(SR_TESTS)
         )
         target_link_libraries(test_quic_maps PRIVATE sr_link sr_relay_conn Catch2::Catch2WithMain)
         add_test(NAME quic_maps COMMAND test_quic_maps)
+
+        add_executable(test_quic_lifecycle
+            test/test_quic_lifecycle.cpp
+        )
+        target_link_libraries(test_quic_lifecycle PRIVATE sr_link sr_relay_conn Catch2::Catch2WithMain)
+        add_test(NAME quic_lifecycle COMMAND test_quic_lifecycle)
     endif()
 
     add_executable(test_bt
