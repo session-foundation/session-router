@@ -412,10 +412,76 @@ The study demonstrates the full lifecycle from curiosity to contribution:
 | Wire format integration | branch: `issue/1232-wire-format-fix` | 7 commits |
 | Upstream PRs | #37, #38, #39 | 3 PRs |
 | Analysis graph (internal) | Proprietary TRUG | 91 nodes, 366 edges |
+| Clean room AAA specification | Planned — TRUGS LLC IP | TBD |
+| Go reimplementation | Planned — GitHub Codespace + Copilot | TBD |
 
 ---
 
-## 11. Conclusion
+## 11. Forward Direction: Clean Room Reimplementation
+
+### 11.1 Objective
+
+Build a privately owned encrypted messaging client for the SaltWind RPG ecosystem and chatbot distribution. The system will be a web application where players interact with the game world and AI chatbot through end-to-end encrypted channels — using the cryptographic protocol knowledge gained from the session-router analysis, without carrying GPL obligations.
+
+### 11.2 Clean Room Methodology
+
+The reimplementation uses a formal clean room wall:
+
+| Role | Entity | Access |
+|------|--------|--------|
+| **Specification author** | Xepayac (human) | Read upstream source, built analysis graph, wrote C++ rewrite |
+| **Implementer** | GitHub Copilot in Codespace | Sees ONLY the AAA specification file — never the upstream C++ or the GPL rewrite |
+
+The specification author writes a recursive AAA file describing WHAT the protocol does — message formats, crypto operations, state machines, wire encoding. The AAA does not contain upstream code, internal class names, or references to the GPL codebase. Protocols are not copyrightable; specific expressions are. The implementer (Copilot) produces its own expression from the specification alone.
+
+### 11.3 Why Go
+
+The reimplementation will be written in Go:
+
+- **Single binary deployment.** No runtime dependencies. The web app, messaging server, and crypto stack compile to one binary.
+- **Native concurrency.** Goroutines handle connection multiplexing without the threading model problems that plagued the upstream C++ (NullMutex, invisible single-thread invariant).
+- **Standard library crypto.** `golang.org/x/crypto` provides NaCl boxes, ChaCha20-Poly1305, BLAKE2b, Ed25519, X25519 — no libsodium dependency.
+- **Native HTTP/WebSocket.** The web layer uses Go's standard library, not an IP-level tunnel.
+- **Cross-compilation.** Build for every deployment target from one machine.
+- **Maximum clean room distance.** Go and C++ share zero syntactic similarity. Accidental code resemblance is impossible.
+- **Aligned with existing architecture decision.** Python handles storage (trugs-store/tools). Go handles orchestration, execution, and everything in products.
+
+### 11.4 Recursive AAA
+
+The specification will use the AAA (Architecture-Audit-Action) format — the same 9-phase methodology used throughout TRUGS development. The top-level AAA defines the system. It instructs Copilot to decompose into sub-AAAs for each component:
+
+```
+Top-Level AAA
+├── AAA: Crypto Layer (sealed boxes, AEAD, key derivation, session keys)
+├── AAA: Messaging Protocol (session handshake, message framing, E2E encryption)
+├── AAA: Transport (WebSocket server, connection lifecycle, reconnection)
+├── AAA: Web Application (HTTP API, auth, rate limiting, static assets)
+├── AAA: Chatbot Integration (SaltWind game API, conversation management)
+└── AAA: Storage (message persistence, TRUG-backed conversation graph)
+```
+
+Each sub-AAA follows the same 9 phases: VISION → FEASIBILITY → SPECIFICATIONS → ARCHITECTURE → VALIDATION → CODING → TESTING → AUDIT → DEPLOYMENT. Copilot generates its own plans, its own architecture, its own code — all from the specification. The output is Copilot's expression, not a derivative of GPL code.
+
+### 11.5 What This Proves
+
+This phase serves as a second capability study:
+
+1. **AAA as cross-agent specification format.** If Copilot — a different AI agent with different training, different context limits, different architectural reasoning — can produce a working system from an AAA file alone, then AAA is a sufficient specification language for any LLM agent. Not just Claude.
+
+2. **TRUG analysis produces transferable understanding.** The 91-node, 366-edge graph produced knowledge deep enough to write a protocol specification that a third party can implement. The analysis system doesn't just help YOU understand — it produces artifacts that transfer understanding to others.
+
+3. **Graph-directed development lifecycle.** Curiosity → analysis → understanding → specification → clean room implementation. The graph is the bridge between "I read their code" and "I own my own code."
+
+### 11.6 License Outcome
+
+- The AAA specification is TRUGS LLC intellectual property.
+- The Go implementation is owned by Xepayac/TRUGS LLC.
+- License is chosen by the owner — no GPL obligation.
+- The upstream GPL code was never seen by the implementer.
+
+---
+
+## 12. Conclusion
 
 A graph-based analysis system transformed a Friday evening's curiosity into a complete, audited, wire-compatible rewrite of a security-critical network protocol in 3 days. The key enabler was not the AI agent (which wrote the code) but the analysis methodology (which directed what to write). The three-pass approach — structural flow, dependency cycles, hidden complexity — produced understanding that would have required weeks of manual code review. That understanding made the rewrite both possible and correct.
 
