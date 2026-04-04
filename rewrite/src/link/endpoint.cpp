@@ -58,8 +58,29 @@ namespace sr::link
             std::string_view{reinterpret_cast<const char*>(ed_pubkey.data()), 32});
 
         _impl->tls_creds->request_client_keys(
-            []([[maybe_unused]] std::span<const uint8_t> key, [[maybe_unused]] std::string_view alpn) -> bool {
-                return true;
+            [this](std::span<const uint8_t> key, std::string_view alpn) -> bool {
+                // If no key verify callback set, accept all (testing/permissive mode)
+                if (!_key_verify)
+                    return true;
+
+                // Non-relay connections: accept if no key or valid size
+                if (alpn != "Session_Router_R")
+                {
+                    if (key.empty() || key.size() == 32)
+                        return true;
+                    return false;  // Wrong key size
+                }
+
+                // Relay connections MUST provide a valid 32-byte key
+                if (key.size() != 32)
+                    return false;
+
+                // Build RouterID from key and check with callback
+                sr::crypto::Ed25519PubKey pk{};
+                std::memcpy(pk.data(), key.data(), 32);
+                sr::contact::RouterID rid{pk};
+
+                return _key_verify(rid, alpn);
             });
 
         auto in_alpns = _is_relay
@@ -185,6 +206,8 @@ namespace sr::link
     void Endpoint::on_datagram(DatagramHandler handler) { _dgram_handler = std::move(handler); }
 
     void Endpoint::on_request(BTStreamHandler handler) { _bt_handler = std::move(handler); }
+
+    void Endpoint::set_key_verify(KeyVerifyCallback callback) { _key_verify = std::move(callback); }
 
     bool Endpoint::is_connected(const RouterID& to) const
     {

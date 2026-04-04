@@ -20,6 +20,11 @@ namespace sr::link
         std::span<const std::byte> payload,
         std::function<void(std::vector<std::byte>)> respond)>;
 
+    // Key verification callback. Called during TLS handshake for inbound relay connections.
+    // Returns true to accept the connection, false to reject.
+    // Parameters: remote RouterID, selected ALPN string.
+    using KeyVerifyCallback = std::function<bool(const sr::contact::RouterID& rid, std::string_view alpn)>;
+
     // Endpoint wraps oxen-libquic for session-router transport.
     // Manages QUIC connections to relay nodes.
     // Does NOT parse message contents — just delivers bytes.
@@ -50,6 +55,11 @@ namespace sr::link
         void on_datagram(DatagramHandler handler);
         void on_request(BTStreamHandler handler);
 
+        // Set key verification callback for inbound connections.
+        // Must be called before listen().
+        // If not set, all connections are accepted (INSECURE — for testing only).
+        void set_key_verify(KeyVerifyCallback callback);
+
         // Connection management
         bool is_connected(const sr::contact::RouterID& to) const;
         size_t connection_count() const;
@@ -78,6 +88,7 @@ namespace sr::link
         bool _is_relay;
         DatagramHandler _dgram_handler;
         BTStreamHandler _bt_handler;
+        KeyVerifyCallback _key_verify;
 
         // oxen-quic internals (opaque — implementation depends on quic library)
         struct Impl;
