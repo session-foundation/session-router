@@ -411,5 +411,158 @@ Deliverables:
 
 ---
 
+## Audit — 2026-04-03
+
+### Gaps Found
+
+13 issues identified by cross-referencing 85 tests against 37 TRUG nodes and 38 edges.
+
+#### Missing Test Coverage (10 gaps)
+
+| # | Gap | TRUG Node | Action |
+|---|-----|-----------|--------|
+| A1 | Threading model (call/call_get, deadlock risk) | threading_model | Add Category 11: Threading (3 tests) |
+| A2 | make_control() ALPN dispatch branching | ep_make_control | Add to Category 3: tests 3.10-3.12 |
+| A3 | for_each_relay_conn iteration + is_stopping | ep_queries | Add to Category 8: test 8.9 |
+| A4 | unique_edge_range() client IP grouping | ep_queries | Add to Category 2: test 2.13 (via public API) |
+| A5 | send_command to client by ConnectionID | ep_send_command | Add to Category 8: test 8.10 |
+| A6 | testing_client_connect() untracked | ep_special_connect | Add to Category 3: test 3.13 |
+| A7 | make_static_secret() determinism | ep_constructor | Add to Category 1: test 1.14 |
+| A8 | CONN_CLOSE_REDUNDANT error code recognition | ep_conn_closed | Add to Category 5: test 5.8 |
+| A9 | Gossip verify_store dedup decision | mgr_gossip | Add to Category 8: test 8.11 |
+| A10 | Bootstrap RC fetch with zstd compression | mgr_register_bootstrap | Add to Category 8: test 8.12 |
+
+#### Structural Issues (3 issues)
+
+| # | Issue | Action |
+|---|-------|--------|
+| S1 | Category 2 tests can't access private members | Reclassify as loopback tests using public query functions. Or add `friend class QuicTestAccessor;` to Endpoint. |
+| S2 | Harness underspecified — mock Router needs _jq, loop(), port allocation, event loop lifetime | Expand harness design in Phase 4 with concrete mock implementations. |
+| S3 | Ticker tests timing — REDUNDANT_LINGER=20s, DEREGGED_LINGER=30min too slow for CI | Add `#ifdef TESTING` overrides: REDUNDANT_LINGER=200ms, DEREGGED_LINGER=500ms. Document as required code change. |
+
+### Revised Test Count
+
+| Category | Original | Added | New Total |
+|----------|----------|-------|-----------|
+| 1. relay_conn struct | 13 | +1 (A7) | 14 |
+| 2. Connection maps | 12 | +1 (A4) | 13 |
+| 3. ALPN routing | 9 | +4 (A2: 3, A6: 1) | 13 |
+| 4. Key verification | 8 | — | 8 |
+| 5. Bidirectional dedup | 7 | +1 (A8) | 8 |
+| 6. Connection lifecycle | 11 | — | 11 |
+| 7. Tickers | 8 | — | 8 |
+| 8. Command dispatch | 8 | +4 (A3, A5, A9, A10) | 12 |
+| 9. Shutdown and safety | 5 | — | 5 |
+| 10. 0-RTT | 4 | — | 4 |
+| **11. Threading** | **0** | **+3 (A1)** | **3** |
+| **Total** | **85** | **+14** | **99** |
+
+### New Tests Detail
+
+#### Category 11: Threading (NEW — Loopback)
+
+| # | Test | Verifies |
+|---|------|----------|
+| 11.1 | Network callback transfers to router loop | on_conn_established fires in network loop, state change visible in router loop |
+| 11.2 | call_get returns value across loops | get_relay_conn() returns correct value when called from outside router loop |
+| 11.3 | Concurrent access doesn't corrupt | Rapid connect/disconnect while querying connection counts |
+
+#### Added Tests
+
+| # | Test | Category | Verifies |
+|---|------|----------|----------|
+| 1.14 | Static secret determinism | 1 | Same key → same secret, different key → different secret |
+| 2.13 | unique_edge_range grouping | 2 | Client with same-subnet edges → returns range, mixed subnets → nullopt |
+| 3.10 | make_control inbound creates queue_incoming_stream | 3 | Inbound: stream ID = 0, BTRequestStream type |
+| 3.11 | make_control outbound creates open_stream | 3 | Outbound: BTRequestStream with stream_notify |
+| 3.12 | make_control relay uses RouterID as remote | 3 | RELAY_ALPN: remote = RouterID. CLIENT_ALPN: remote = ConnectionID |
+| 3.13 | testing_client_connect untracked | 3 | Connection not in any map, uses CLIENT_ALPN, no keep_alive |
+| 5.8 | CONN_CLOSE_REDUNDANT recognized | 5 | Errcode 6 close doesn't trigger warning log |
+| 8.9 | for_each_relay_conn preferred only | 8 | Only preferred connection visited, not both directions |
+| 8.10 | send_command to client by CID | 8 | Command reaches inbound client, response on router loop |
+| 8.11 | Gossip dedup — known RC not re-gossipped | 8 | Duplicate RC not forwarded to peers |
+| 8.12 | Bootstrap fetch returns compressed RCs | 8 | bfetch_rcs returns zstd-compressed BT-encoded RC list |
+| 11.1-11.3 | (See Category 11 above) | 11 | Threading correctness |
+
+### Updated Harness Design
+
+```cpp
+struct MockJobQueue {
+    quic::Loop& loop;  // Actual event loop for call/call_get
+    
+    template <typename F> void call(F&& f) { loop.call(std::forward<F>(f)); }
+    template <typename F> auto call_get(F&& f) { return loop.call_get(std::forward<F>(f)); }
+};
+
+struct MockNodeDB {
+    std::unordered_set<RouterID> registered;
+    std::unordered_map<RouterID, std::vector<unsigned char>> stored_0rtt;
+    
+    bool is_registered(const RouterID& rid) const { return registered.contains(rid); }
+    void store_0rtt(const RouterID& rid, std::vector<unsigned char> data, auto) { stored_0rtt[rid] = std::move(data); }
+    std::optional<std::vector<unsigned char>> extract_0rtt(const RouterID& rid) { /*...*/ }
+};
+
+struct MockRouter {
+    Ed25519KeyPair keys;
+    RouterID id;
+    bool is_service_node;
+    MockJobQueue jq;
+    MockNodeDB node_db;
+    quic::Address listen_addr;      // localhost:0 (OS-assigned port)
+    int edge_conn_changes = 0;      // Counter for on_edge_conn_change calls
+    
+    quic::Loop& loop() { return jq.loop; }
+    void on_edge_conn_change() { ++edge_conn_changes; }
+};
+
+struct QuicTestHarness {
+    MockRouter router_a;  // Guarantee: router_a.id < router_b.id
+    MockRouter router_b;
+    link::Manager manager_a;
+    link::Manager manager_b;
+    
+    // Setup: both registered in each other's NodeDB
+    QuicTestHarness();
+    
+    void connect_a_to_b();
+    void connect_b_to_a();
+    void wait_established(std::chrono::milliseconds timeout = 5s);
+    void run_for(std::chrono::milliseconds);
+    void tick();  // Advance one event loop cycle on both loops
+    
+    // For ticker tests:
+    static constexpr auto TEST_REDUNDANT_LINGER = 200ms;
+    static constexpr auto TEST_DEREGGED_LINGER = 500ms;
+};
+```
+
+### Port Allocation
+
+Each `MockRouter` binds to `127.0.0.1:0` (OS assigns port). After bind, read actual port via `endpoint->local().port()`. No port conflicts possible.
+
+### Ticker Constants for Testing
+
+Requires one code change — make linger constants configurable:
+
+```cpp
+// endpoint.hpp — change from:
+inline constexpr auto REDUNDANT_LINGER = 20s;
+inline constexpr auto DEREGGED_LINGER = 30min;
+
+// to:
+#ifndef SROUTER_TEST_TIMING
+inline constexpr auto REDUNDANT_LINGER = 20s;
+inline constexpr auto DEREGGED_LINGER = 30min;
+#else
+inline constexpr auto REDUNDANT_LINGER = 200ms;
+inline constexpr auto DEREGGED_LINGER = 500ms;
+#endif
+```
+
+This is the ONLY required upstream code change for testability.
+
+---
+
 *Analysis source: quic_layer.trug.json (37 nodes, 38 edges)*
 *Supersedes: AAA_1234_quic_transport.md*
