@@ -472,12 +472,34 @@ This phase serves as a second capability study:
 
 3. **Graph-directed development lifecycle.** Curiosity → analysis → understanding → specification → clean room implementation. The graph is the bridge between "I read their code" and "I own my own code."
 
-### 11.6 License Outcome
+### 11.6 Disclosure Strategy
+
+This study — the complete document — will be sent to the Session Foundation before the clean room implementation begins.
+
+**Rationale:** Radical transparency eliminates any future claim of deception or bad faith. The Session Foundation will receive:
+
+- The full analysis methodology (three passes, graph construction)
+- The clean room wall definition (spec author vs implementer)
+- The choice of language (Go), AI agent (Copilot), and environment (Codespace)
+- The AAA specification format that will drive the implementation
+- The intended use case (SaltWind game client, chatbot distribution)
+- This study itself — every detail of what was done, how, and why
+
+**Two outcomes, both acceptable:**
+
+1. **Session Foundation challenges the clean room.** They have every detail needed to build a legal case. If a court finds that a protocol specification written by someone who read GPL source code, implemented by a separate AI agent in a different language, constitutes a derivative work — that would be a significant expansion of copyright law. The burden of proof is on the challenger, and the clean room methodology is well-established case law (see: *Sega v. Accolade*, *Sony v. Connectix*).
+
+2. **Session Foundation does not challenge.** Silence after full disclosure with reasonable time to respond constitutes acquiescence. The clean room implementation proceeds with a documented, unchallenged legal foundation.
+
+In either case, the GPL rewrite (3,781 lines of C++20) remains a GPL-3.0 contribution to the Session ecosystem. It was offered as a gift and it stays a gift. The Go implementation is a separate, independent work derived from a protocol specification — not from GPL source code.
+
+### 11.7 License Outcome
 
 - The AAA specification is TRUGS LLC intellectual property.
 - The Go implementation is owned by Xepayac/TRUGS LLC.
 - License is chosen by the owner — no GPL obligation.
 - The upstream GPL code was never seen by the implementer.
+- Full disclosure to the upstream project establishes good faith and starts any applicable limitation period.
 
 ---
 
