@@ -55,32 +55,39 @@ add_library(sr_path
 target_include_directories(sr_path PUBLIC include)
 target_link_libraries(sr_path PUBLIC sr_contact)
 
-# oxen-libquic (pre-built)
-add_library(oxen-quic STATIC IMPORTED)
-set_target_properties(oxen-quic PROPERTIES
-    IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/src/libquic.a"
-    INTERFACE_INCLUDE_DIRECTORIES "${LIBQUIC_SRC_DIR}/include;${LIBQUIC_BUILD_DIR}/static-deps/include;${LIBQUIC_SRC_DIR}/external/oxen-encoding;${LIBQUIC_SRC_DIR}/external/oxen-logging/include;${LIBQUIC_BUILD_DIR}/external/oxen-logging/generated;${LIBQUIC_SRC_DIR}/external/oxen-logging/fmt/include;${LIBQUIC_SRC_DIR}/external/oxen-logging/spdlog/include"
-)
+# oxen-libquic (pre-built) — optional, only needed for Layer 4+ targets
+option(SR_WITH_QUIC "Build QUIC transport layer (requires oxen-libquic)" ON)
+if(SR_WITH_QUIC AND EXISTS "${LIBQUIC_BUILD_DIR}/src/libquic.a")
+    set(SR_HAVE_QUIC TRUE)
+    add_library(oxen-quic STATIC IMPORTED)
+    set_target_properties(oxen-quic PROPERTIES
+        IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/src/libquic.a"
+        INTERFACE_INCLUDE_DIRECTORIES "${LIBQUIC_SRC_DIR}/include;${LIBQUIC_BUILD_DIR}/static-deps/include;${LIBQUIC_SRC_DIR}/external/oxen-encoding;${LIBQUIC_SRC_DIR}/external/oxen-logging/include;${LIBQUIC_BUILD_DIR}/external/oxen-logging/generated;${LIBQUIC_SRC_DIR}/external/oxen-logging/fmt/include;${LIBQUIC_SRC_DIR}/external/oxen-logging/spdlog/include"
+    )
 
-# oxen-logging and its deps (required by libquic headers)
-add_library(oxen-logging STATIC IMPORTED)
-set_target_properties(oxen-logging PROPERTIES IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/external/oxen-logging/liboxen-logging.a")
-add_library(spdlog STATIC IMPORTED)
-set_target_properties(spdlog PROPERTIES IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/external/oxen-logging/spdlog/libspdlog.a")
-add_library(fmt STATIC IMPORTED)
-set_target_properties(fmt PROPERTIES IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/external/oxen-logging/fmt/libfmt.a")
+    # oxen-logging and its deps (required by libquic headers)
+    add_library(oxen-logging STATIC IMPORTED)
+    set_target_properties(oxen-logging PROPERTIES IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/external/oxen-logging/liboxen-logging.a")
+    add_library(spdlog STATIC IMPORTED)
+    set_target_properties(spdlog PROPERTIES IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/external/oxen-logging/spdlog/libspdlog.a")
+    add_library(fmt STATIC IMPORTED)
+    set_target_properties(fmt PROPERTIES IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/external/oxen-logging/fmt/libfmt.a")
 
-# ngtcp2 dependencies
-add_library(ngtcp2 STATIC IMPORTED)
-set_target_properties(ngtcp2 PROPERTIES IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/static-deps/lib/libngtcp2.a")
-add_library(ngtcp2_crypto STATIC IMPORTED)
-set_target_properties(ngtcp2_crypto PROPERTIES IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/static-deps/lib/libngtcp2_crypto_gnutls.a")
+    # ngtcp2 dependencies
+    add_library(ngtcp2 STATIC IMPORTED)
+    set_target_properties(ngtcp2 PROPERTIES IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/static-deps/lib/libngtcp2.a")
+    add_library(ngtcp2_crypto STATIC IMPORTED)
+    set_target_properties(ngtcp2_crypto PROPERTIES IMPORTED_LOCATION "${LIBQUIC_BUILD_DIR}/static-deps/lib/libngtcp2_crypto_gnutls.a")
 
-pkg_check_modules(GNUTLS REQUIRED IMPORTED_TARGET gnutls)
-pkg_check_modules(NETTLE REQUIRED IMPORTED_TARGET nettle)
-pkg_check_modules(HOGWEED REQUIRED IMPORTED_TARGET hogweed)
-pkg_check_modules(LIBEVENT REQUIRED IMPORTED_TARGET libevent_core)
-pkg_check_modules(LIBEVENT_PT REQUIRED IMPORTED_TARGET libevent_pthreads)
+    pkg_check_modules(GNUTLS REQUIRED IMPORTED_TARGET gnutls)
+    pkg_check_modules(NETTLE REQUIRED IMPORTED_TARGET nettle)
+    pkg_check_modules(HOGWEED REQUIRED IMPORTED_TARGET hogweed)
+    pkg_check_modules(LIBEVENT REQUIRED IMPORTED_TARGET libevent_core)
+    pkg_check_modules(LIBEVENT_PT REQUIRED IMPORTED_TARGET libevent_pthreads)
+else()
+    set(SR_HAVE_QUIC FALSE)
+    message(STATUS "oxen-libquic not found — skipping QUIC transport targets (unit tests still available)")
+endif()
 
 # Session library (Layer 3)
 add_library(sr_session
@@ -89,36 +96,47 @@ add_library(sr_session
 target_include_directories(sr_session PUBLIC include)
 target_link_libraries(sr_session PUBLIC sr_path)
 
-# Link library (Layer 4)
-add_library(sr_link
-    src/link/endpoint.cpp
-    src/link/manager.cpp
+# relay_conn library (no QUIC dependency — pure data structure)
+add_library(sr_relay_conn
+    src/link/relay_conn.cpp
 )
-target_include_directories(sr_link PUBLIC include)
-target_link_libraries(sr_link PUBLIC sr_session oxen-quic oxen-logging spdlog fmt
-    ngtcp2 ngtcp2_crypto PkgConfig::GNUTLS PkgConfig::NETTLE PkgConfig::HOGWEED
-    PkgConfig::LIBEVENT PkgConfig::LIBEVENT_PT)
+target_include_directories(sr_relay_conn PUBLIC include)
+target_link_libraries(sr_relay_conn PUBLIC sr_crypto)
 
-# Node library (Layer 5)
-add_library(sr_node
-    src/node/config.cpp
-    src/node/tun.cpp
-    src/node/dns.cpp
-    src/node/node.cpp
-)
-target_include_directories(sr_node PUBLIC include)
-target_link_libraries(sr_node PUBLIC sr_link)
+# Layers 4-5 and main executable require QUIC
+if(SR_HAVE_QUIC)
+    # Link library (Layer 4)
+    add_library(sr_link
+        src/link/endpoint.cpp
+        src/link/manager.cpp
+        src/link/relay_conn.cpp
+    )
+    target_include_directories(sr_link PUBLIC include)
+    target_link_libraries(sr_link PUBLIC sr_session sr_relay_conn oxen-quic oxen-logging spdlog fmt
+        ngtcp2 ngtcp2_crypto PkgConfig::GNUTLS PkgConfig::NETTLE PkgConfig::HOGWEED
+        PkgConfig::LIBEVENT PkgConfig::LIBEVENT_PT)
 
-# Exit library (v1.1 feature)
-add_library(sr_exit
-    src/exit/exit_handler.cpp
-)
-target_include_directories(sr_exit PUBLIC include)
-target_link_libraries(sr_exit PUBLIC sr_node)
+    # Node library (Layer 5)
+    add_library(sr_node
+        src/node/config.cpp
+        src/node/tun.cpp
+        src/node/dns.cpp
+        src/node/node.cpp
+    )
+    target_include_directories(sr_node PUBLIC include)
+    target_link_libraries(sr_node PUBLIC sr_link)
 
-# Main executable
-add_executable(session-router src/main.cpp)
-target_link_libraries(session-router PRIVATE sr_node)
+    # Exit library (v1.1 feature)
+    add_library(sr_exit
+        src/exit/exit_handler.cpp
+    )
+    target_include_directories(sr_exit PUBLIC include)
+    target_link_libraries(sr_exit PUBLIC sr_node)
+
+    # Main executable
+    add_executable(session-router src/main.cpp)
+    target_link_libraries(session-router PRIVATE sr_node)
+endif()
 
 # Tests
 option(SR_TESTS "Build tests" ON)
@@ -166,11 +184,13 @@ if(SR_TESTS)
     target_link_libraries(test_session PRIVATE sr_session Catch2::Catch2WithMain)
     add_test(NAME session COMMAND test_session)
 
-    add_executable(test_link
-        test/test_manager.cpp
+    # QUIC transport test suite — Category 1: relay_conn unit tests
+    # No QUIC dependency — builds without oxen-libquic
+    add_executable(test_relay_conn
+        test/test_relay_conn.cpp
     )
-    target_link_libraries(test_link PRIVATE sr_link Catch2::Catch2WithMain)
-    add_test(NAME link COMMAND test_link)
+    target_link_libraries(test_relay_conn PRIVATE sr_relay_conn Catch2::Catch2WithMain)
+    add_test(NAME relay_conn COMMAND test_relay_conn)
 
     add_executable(test_bt
         test/test_bt.cpp
@@ -178,18 +198,27 @@ if(SR_TESTS)
     target_link_libraries(test_bt PRIVATE sr_contact Catch2::Catch2WithMain)
     add_test(NAME bt COMMAND test_bt)
 
-    add_executable(test_exit
-        test/test_exit.cpp
-    )
-    target_link_libraries(test_exit PRIVATE sr_exit Catch2::Catch2WithMain)
-    add_test(NAME exit COMMAND test_exit)
+    # Tests that require QUIC (Layer 4+)
+    if(SR_HAVE_QUIC)
+        add_executable(test_link
+            test/test_manager.cpp
+        )
+        target_link_libraries(test_link PRIVATE sr_link Catch2::Catch2WithMain)
+        add_test(NAME link COMMAND test_link)
 
-    add_executable(test_node
-        test/test_config.cpp
-        test/test_tun.cpp
-        test/test_dns.cpp
-        test/test_events.cpp
-    )
-    target_link_libraries(test_node PRIVATE sr_node Catch2::Catch2WithMain)
-    add_test(NAME node COMMAND test_node)
+        add_executable(test_exit
+            test/test_exit.cpp
+        )
+        target_link_libraries(test_exit PRIVATE sr_exit Catch2::Catch2WithMain)
+        add_test(NAME exit COMMAND test_exit)
+
+        add_executable(test_node
+            test/test_config.cpp
+            test/test_tun.cpp
+            test/test_dns.cpp
+            test/test_events.cpp
+        )
+        target_link_libraries(test_node PRIVATE sr_node Catch2::Catch2WithMain)
+        add_test(NAME node COMMAND test_node)
+    endif()
 endif()
