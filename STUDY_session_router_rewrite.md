@@ -556,11 +556,133 @@ In either case, the GPL rewrite (Phase 1) remains a GPL-3.0 contribution to the 
 
 ---
 
-## 12. Assessment: State of the Upstream Project
+## 12. QUIC Transport Audit
+
+### 12.1 Context
+
+We were auditing the upstream QUIC implementation to improve the code through testing. The QUIC transport layer (`src/link/`, 3,014 lines across 6 files) is the newest and most actively developed part of the codebase — the QUIC migration from the custom IWP wire protocol began in July 2023 and is ongoing. We assumed this would be the cleanest code in the project. We were wrong.
+
+Our approach was methodical. First, we built a TRUG graph of the QUIC layer (quic_layer.trug.json — 37 nodes, 38 edges) mapping every state machine, connection map, lifecycle transition, and threading interaction. Then we designed a comprehensive test suite (106 tests across 11 categories). Then we audited the test suite twice against the TRUG graph — once for coverage gaps, once for insidious structural problems. This is what we found.
+
+### 13.2 Architecture (What Exists)
+
+The QUIC layer is well-designed on paper. It has:
+
+- **Six separate connection maps** tracking connections by type (relay, client, bootstrap), direction (inbound, outbound), and lifecycle state (pending, established, dead). This is correct — a flat map would conflate connection types and break deduplication.
+- **Bidirectional relay connection deduplication.** When two relays connect to each other simultaneously, both connections exist temporarily. A deterministic winner is selected (`inbound_wins = their_rid < our_rid`), and the loser is closed after a 20-second linger period. Both sides compute the same winner. This is elegant.
+- **Three ALPN types** with per-type timeouts, key requirements, and command sets. Relay connections (10s keep-alive, 33s idle, key required, 8 commands). Client connections (20s keep-alive, 63s idle, key optional, 2 commands). Bootstrap connections (no keep-alive, 10s idle, 1 command, untracked). This is correct.
+- **Two lifecycle tickers.** Redundancy ticker (every 20s) closes bidirectional losers. Deregistration ticker (every 1 minute) tracks relays that leave the network and closes their connections after 30 minutes. Both are correct.
+
+### 13.3 Threading Model (Where It Gets Dangerous)
+
+The QUIC layer operates across two event loops:
+
+- **Network loop** (`quic::Loop`) — owns the QUIC endpoint, runs all network callbacks.
+- **Router loop** (`router._jq`, a JobQueue) — owns all connection state, runs all protocol logic.
+
+Every callback fires in the network loop and must transfer to the router loop via `router._jq->call()` (fire-and-forget) or `router._jq->call_get()` (synchronous, returns value). This is a standard dual-loop pattern. The problem is in the details.
+
+**Finding W1: call_get from inside the router loop into itself.**
+
+`ctrl_stream_impl()` (the core connect-or-create function) asserts that it runs inside the router loop. It then calls `get_relay_conn()`, which internally does `router._jq->call_get(...)` — a synchronous call from the router loop back into the router loop. On any normal JobQueue implementation, this deadlocks: a thread waiting on itself.
+
+The code works because the real JobQueue special-cases this — detecting that the caller is already inside the loop and executing the function inline. But this behavior is implicit, undocumented, and invisible. Anyone writing a test mock, a replacement JobQueue, or a clean-room reimplementation will hit a deadlock that looks like a test infrastructure bug, not an upstream design decision.
+
+This is the most insidious single finding in the entire audit. It is not a bug — it is a trap.
+
+**Finding W6: Datagram handler lacks lifetime safety.**
+
+The `on_conn_closed` callback correctly uses a canary pattern — a `shared_ptr<bool>` that is set to `false` in Endpoint's destructor, checked at the start of the callback lambda. If the Endpoint is destroyed while the callback is queued, the canary check prevents use-after-free.
+
+The datagram handler does not use this pattern. It captures `this` directly:
+
+```cpp
+[this](quic::datagram dgram) {
+    router._jq->call([this, msg = std::move(dgram).extract()]() mutable {
+        manager.handle_session_message(std::move(msg));
+    });
+}
+```
+
+If the Endpoint is destroyed while a datagram is queued in the network loop, the outer lambda fires with a dangling `this`. The inner lambda is then queued in the router loop with the same dangling pointer. This is a use-after-free vulnerability in the transport layer of an onion routing protocol.
+
+### 13.4 Race Conditions
+
+**Finding W3: Cross-loop control stream creation.**
+
+When initiating an outbound connection, `ctrl_stream_impl()` runs in the router loop and calls `make_control()`, which calls `conn.open_stream()` — an operation on a `quic::Connection` object that belongs to the network loop. This works because the connection is still in the pre-establishment state (stored in `pending_outbound`), so no network callbacks are firing on it yet.
+
+But if the connection establishes between the `endpoint->connect()` call and the `make_control()` call, network callbacks begin firing on the connection while `make_control()` is still operating on it from the router loop. The window is tiny — likely microseconds — but it exists, and in a security-critical application, race conditions in the transport layer are not acceptable.
+
+**Finding W5: Two different control stream creation paths.**
+
+Outbound connections create their control stream BEFORE establishment (in `ctrl_stream_impl()`, running in the router loop). Inbound connections create their control stream DURING establishment (in `on_conn_established()`, running in the network loop). The handlers are registered at different times, from different threads, through different code paths.
+
+This means the system is correct but fragile — any change to the stream registration order or callback timing could break one path without affecting the other, and no test exists to catch it.
+
+### 13.5 Structural Anomalies
+
+**Finding W2: Non-exclusive connection close matching.**
+
+When a connection closes, `on_conn_closed()` checks if the connection's `reference_id` matches the inbound direction, then separately checks if it matches the outbound direction. These checks are `if` statements, not `if-else`. A single close event could theoretically match both branches and close both directions of a relay_conn. This is defensive coding, but it means a single connection close could destroy an entire relay relationship — and no test verifies that this doesn't happen.
+
+**Finding W4: Asymmetric handler capture.**
+
+The `path_build` command handler captures the `remote` identity by value at registration time. All other command handlers extract the sender identity from the message at call time. This means `path_build` knows who sent the request based on which connection it was registered on, while `gossip_rc` knows who sent it based on the message's own metadata. If a connection is reused (e.g., after a dedup winner selection), `path_build`'s captured identity becomes stale.
+
+**Finding W7: Iterator safety during redundancy closing.**
+
+`close_redundant()` iterates `relay_bidir` and calls `Connection::close()` on the loser direction. The close triggers an `on_conn_closed` callback that — after transfer to the router loop — could modify `relay_conns` or `relay_bidir`. This is safe only because the callback transfer is asynchronous (`call()`, not `call_get()`), so the modification queues after the iteration completes. But this safety depends on the `call()` vs `call_get()` distinction, which is never documented or tested.
+
+### 12.6 Upstream Bug: Request Leak in find_cc
+
+**Finding W8.** The `find_cc` handler has a legacy code path (for clients running versions before 1.0.2) that fans out a lookup request to all closest relays and returns the first success. The response counting logic has a bug:
+
+```cpp
+if (--*remaining == 0)
+    return;  // This was an error, but there are more responses to come back
+```
+
+When all forwarded requests fail and the counter reaches zero, the function returns without calling `respond()`. The original client request hangs forever — no response, no error, no timeout from the handler side. The client eventually times out, but the relay has silently dropped the request.
+
+This is a confirmed bug in the upstream codebase. The comment says "there are more responses to come back," but the counter has reached zero — there are no more responses. The correct behavior is to call `respond(error)` when the last response fails.
+
+### 12.7 Test Suite Produced
+
+The audit produced a test plan of 106 tests across 11 categories:
+
+| Category | Tests | Level |
+|----------|-------|-------|
+| relay_conn data structure | 14 | Unit |
+| Connection map operations | 13 | Unit |
+| ALPN routing | 13 | Loopback |
+| Key verification | 8 | Loopback |
+| Bidirectional dedup | 8 | Loopback |
+| Connection lifecycle | 13 | Loopback |
+| Tickers | 9 | Loopback |
+| Command dispatch | 14 | Loopback |
+| Shutdown and safety | 6 | Loopback |
+| 0-RTT | 4 | Loopback |
+| Threading | 4 | Loopback |
+| **Total** | **106** | |
+
+Every test traces to a node or edge in the TRUG graph. The test plan, the TRUG graph, and the audit findings are available in the repository.
+
+### 12.8 What This Demonstrates
+
+We set out to help. We wanted to write tests for untested code and contribute them upstream. The TRUG analysis was supposed to be the efficient way to understand what to test.
+
+Instead, the analysis revealed that the code's correctness depends on undocumented invariants (W1: inline call_get), implicit threading contracts (W3: cross-loop access safe only during pre-establishment), and asymmetric design decisions (W4, W5) that no test can verify because no test infrastructure exists. We also found a use-after-free in the datagram handler (W6) and a request leak in the protocol logic (W8).
+
+These are not the findings of a hostile audit. These are the findings of someone trying to write tests for code that has never been tested. The fact that testing the code reveals bugs is not surprising. The fact that the code cannot be tested without first understanding an undocumented JobQueue behavioral contract (W1) is the real finding — it means no one outside the original developers can safely contribute to this code.
+
+---
+
+## 13. Assessment: State of the Upstream Project
 
 This section is written plainly.
 
-### 12.1 The Code
+### 13.1 The Code
 
 Session-router is a security-critical application — an onion router handling adversarial network traffic. The codebase has:
 
@@ -573,19 +695,19 @@ Session-router is a security-critical application — an onion router handling a
 
 This is not a codebase that can be incrementally improved. The architecture prevents it.
 
-### 12.2 The Team
+### 13.2 The Team
 
 The project had 40+ contributors over 8 years. It now has 2 active maintainers working on a 37,000-line codebase. The QUIC transport migration — replacing the custom wire protocol with oxen-libquic — began in July 2023 and is still not complete nearly 3 years later. The dependency (oxen-libquic) has required multiple emergency version bumps for crashes, 0-RTT bugs, and congestion control issues.
 
 Two developers maintaining 37,000 lines of circular, untested, unfuzzed cryptographic networking code is not sustainable.
 
-### 12.3 The Technology Landscape
+### 13.3 The Technology Landscape
 
 It is 2026. AI-assisted development is not experimental — it is the standard for any team that wants to remain competitive. A single person with a graph-based analysis system and an AI agent produced a complete, audited, wire-compatible rewrite in one overnight session. That rewrite has more test coverage, fewer architectural problems, and a cleaner security posture than the original.
 
 The upstream project has not adopted AI-assisted development, automated security auditing, or any of the tooling that makes modern software development tractable at this scale. The result is predictable: a shrinking team falling further behind on a growing codebase with accumulating technical debt and no systematic way to address it.
 
-### 12.4 The Offer
+### 13.4 The Offer
 
 The C++ rewrite is GPL-3.0 and freely available. It is a complete, working, audited replacement for the core protocol layers. It comes with:
 
@@ -599,7 +721,7 @@ The C++ rewrite is GPL-3.0 and freely available. It is a complete, working, audi
 
 This is what graph-directed analysis produces. The question for the Session Foundation is whether they want to use it.
 
-### 12.5 The Alternative
+### 13.5 The Alternative
 
 If the upstream project continues on its current trajectory — two maintainers, no AI tooling, no fuzz testing, accumulating tech debt, broken features, acknowledged security vulnerabilities in TODO comments — the LLARP protocol will be reimplemented in Go under Apache 2.0 by a team that has already demonstrated the ability to understand and rebuild the system from scratch.
 
@@ -609,7 +731,7 @@ This is not a threat. It is a description of what is already planned, fully docu
 
 ---
 
-## 13. Conclusion
+## 14. Conclusion
 
 A graph-based analysis system transformed a Friday evening's frustration into a complete, audited, wire-compatible rewrite of a security-critical network protocol in 3 days. The key enabler was not the AI agent (which wrote the code) but the analysis methodology (which directed what to write). The three-pass approach — structural flow, dependency cycles, hidden complexity — produced understanding that would have required weeks of manual code review. That understanding made the rewrite both possible and correct.
 
