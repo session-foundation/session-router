@@ -16,12 +16,14 @@ namespace sr::link
             conn = ptr.get();
     }
 
-    void relay_conn::close(bool direction_inbound, uint64_t /*errcode*/)
+    void relay_conn::close(bool direction_inbound, uint64_t errcode)
     {
         auto& to_close = direction_inbound ? inbound : outbound;
         if (!to_close)
             return;
 
+        // Close the QUIC connection before dropping the shared_ptr (S3 fix)
+        to_close->close(errcode);
         to_close.reset();
 
         // Switch preferred to the other direction (nullptr if it doesn't exist)

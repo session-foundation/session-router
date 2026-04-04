@@ -104,6 +104,7 @@ namespace sr::link
         KeyVerifyCallback _key_verify;
         TicketStoreCallback _ticket_store;
         TicketExtractCallback _ticket_extract;
+        sr::contact::RouterID _our_rid;  // Our RouterID, set during listen()
 
         // oxen-quic internals (opaque — implementation depends on quic library)
         struct Impl;

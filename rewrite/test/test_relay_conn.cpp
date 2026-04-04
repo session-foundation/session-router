@@ -9,18 +9,13 @@
 using namespace sr::link;
 using namespace sr::crypto;
 
-// Minimal ConnectionInfo for unit testing relay_conn.
-// Does not require oxen-libquic — just needs to be a shared_ptr target
-// so relay_conn can track inbound/outbound pointers.
-struct sr::link::ConnectionInfo
-{
-    std::string label;  // "inbound" or "outbound" for test identification
-    explicit ConnectionInfo(std::string l) : label{std::move(l)} {}
-};
+// Stub for ConnectionInfo::close() — the real one is in endpoint.cpp
+// and requires oxen-libquic. Unit tests don't need real QUIC closing.
+void sr::link::ConnectionInfo::close(uint64_t) {}
 
-static auto make_conn(std::string label)
+static auto make_conn()
 {
-    return std::make_shared<ConnectionInfo>(std::move(label));
+    return std::make_shared<ConnectionInfo>();
 }
 
 // --- Category 1: relay_conn Data Structure (15 unit tests) ---
@@ -54,7 +49,7 @@ TEST_CASE("1.3 Winner symmetry", "[relay_conn][unit]")
     // On the side with the higher RouterID: remote < local, so inbound_wins = true
     relay_conn rc_high{true};
 
-    auto conn = make_conn("shared_connection");
+    auto conn = make_conn();
 
     // Low sets outbound (its connection to high)
     rc_low.set_conn(conn, false);
@@ -73,7 +68,7 @@ TEST_CASE("1.3 Winner symmetry", "[relay_conn][unit]")
 TEST_CASE("1.4 set_conn inbound only", "[relay_conn][unit]")
 {
     relay_conn rc{true};
-    auto c = make_conn("inbound");
+    auto c = make_conn();
     rc.set_conn(c, true);
 
     REQUIRE(rc.inbound == c);
@@ -84,7 +79,7 @@ TEST_CASE("1.4 set_conn inbound only", "[relay_conn][unit]")
 TEST_CASE("1.5 set_conn outbound only", "[relay_conn][unit]")
 {
     relay_conn rc{false};
-    auto c = make_conn("outbound");
+    auto c = make_conn();
     rc.set_conn(c, false);
 
     REQUIRE(rc.outbound == c);
@@ -95,8 +90,8 @@ TEST_CASE("1.5 set_conn outbound only", "[relay_conn][unit]")
 TEST_CASE("1.6 set_conn both — inbound wins", "[relay_conn][unit]")
 {
     relay_conn rc{true};  // inbound wins
-    auto in = make_conn("inbound");
-    auto out = make_conn("outbound");
+    auto in = make_conn();
+    auto out = make_conn();
 
     rc.set_conn(out, false);
     REQUIRE(rc.conn == out.get());  // only connection, so it's preferred
@@ -110,8 +105,8 @@ TEST_CASE("1.6 set_conn both — inbound wins", "[relay_conn][unit]")
 TEST_CASE("1.7 set_conn both — outbound wins", "[relay_conn][unit]")
 {
     relay_conn rc{false};  // outbound wins
-    auto in = make_conn("inbound");
-    auto out = make_conn("outbound");
+    auto in = make_conn();
+    auto out = make_conn();
 
     rc.set_conn(in, true);
     REQUIRE(rc.conn == in.get());  // only connection
@@ -125,8 +120,8 @@ TEST_CASE("1.7 set_conn both — outbound wins", "[relay_conn][unit]")
 TEST_CASE("1.8 set_conn replaces existing", "[relay_conn][unit]")
 {
     relay_conn rc{true};
-    auto old_in = make_conn("old_inbound");
-    auto new_in = make_conn("new_inbound");
+    auto old_in = make_conn();
+    auto new_in = make_conn();
 
     rc.set_conn(old_in, true);
     REQUIRE(rc.conn == old_in.get());
@@ -141,8 +136,8 @@ TEST_CASE("1.8 set_conn replaces existing", "[relay_conn][unit]")
 TEST_CASE("1.9 close inbound, outbound remains", "[relay_conn][unit]")
 {
     relay_conn rc{true};
-    auto in = make_conn("inbound");
-    auto out = make_conn("outbound");
+    auto in = make_conn();
+    auto out = make_conn();
 
     rc.set_conn(in, true);
     rc.set_conn(out, false);
@@ -156,8 +151,8 @@ TEST_CASE("1.9 close inbound, outbound remains", "[relay_conn][unit]")
 TEST_CASE("1.10 close outbound, inbound remains", "[relay_conn][unit]")
 {
     relay_conn rc{false};
-    auto in = make_conn("inbound");
-    auto out = make_conn("outbound");
+    auto in = make_conn();
+    auto out = make_conn();
 
     rc.set_conn(in, true);
     rc.set_conn(out, false);
@@ -171,8 +166,8 @@ TEST_CASE("1.10 close outbound, inbound remains", "[relay_conn][unit]")
 TEST_CASE("1.11 close both", "[relay_conn][unit]")
 {
     relay_conn rc{true};
-    auto in = make_conn("inbound");
-    auto out = make_conn("outbound");
+    auto in = make_conn();
+    auto out = make_conn();
 
     rc.set_conn(in, true);
     rc.set_conn(out, false);
@@ -186,8 +181,8 @@ TEST_CASE("1.11 close both", "[relay_conn][unit]")
 TEST_CASE("1.12 close_redundant — inbound wins", "[relay_conn][unit]")
 {
     relay_conn rc{true};  // inbound wins
-    auto in = make_conn("inbound");
-    auto out = make_conn("outbound");
+    auto in = make_conn();
+    auto out = make_conn();
 
     rc.set_conn(in, true);
     rc.set_conn(out, false);
@@ -201,8 +196,8 @@ TEST_CASE("1.12 close_redundant — inbound wins", "[relay_conn][unit]")
 TEST_CASE("1.13 close_redundant — outbound wins", "[relay_conn][unit]")
 {
     relay_conn rc{false};  // outbound wins
-    auto in = make_conn("inbound");
-    auto out = make_conn("outbound");
+    auto in = make_conn();
+    auto out = make_conn();
 
     rc.set_conn(in, true);
     rc.set_conn(out, false);
@@ -245,8 +240,7 @@ TEST_CASE("1.14 Static secret determinism", "[relay_conn][unit]")
 TEST_CASE("1.15 Connection wrapper construction", "[relay_conn][unit]")
 {
     // ConnectionInfo (our test mock) constructs with a label
-    auto c = make_conn("test");
-    REQUIRE(c->label == "test");
+    auto c = make_conn();
     REQUIRE(c.use_count() == 1);
 
     // relay_conn holds shared_ptr, incrementing refcount

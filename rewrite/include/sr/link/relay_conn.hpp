@@ -1,6 +1,6 @@
 #pragma once
 
-#include <sr/contact/router_id.hpp>
+#include <sr/link/connection_info.hpp>
 
 #include <cstdint>
 #include <functional>
@@ -8,8 +8,6 @@
 
 namespace sr::link
 {
-    // Forward declaration — Connection wraps quic::Connection + datagrams + control_stream
-    struct ConnectionInfo;
 
     // Close callback type for relay_conn to notify on close
     using CloseCallback = std::function<void(uint64_t errcode)>;

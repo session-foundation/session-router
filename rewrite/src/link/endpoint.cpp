@@ -1,5 +1,6 @@
 #include <oxen/quic.hpp>
 #include <oxen/quic/gnutls_crypto.hpp>
+#include <sr/link/connection_info.hpp>
 #include <sr/link/endpoint.hpp>
 #include <sr/link/relay_conn.hpp>
 
@@ -17,22 +18,11 @@ namespace sr::link
     using namespace sr::contact;
     namespace quic = oxen::quic;
 
-    // Connection wrapper — same as upstream srouter::link::Connection
-    struct ConnectionInfo
+    void ConnectionInfo::close(uint64_t errcode)
     {
-        RouterID rid;
-        std::shared_ptr<quic::Connection> conn;
-        std::shared_ptr<quic::Datagrams> datagrams;
-        std::shared_ptr<quic::BTRequestStream> control_stream;
-        std::string alpn;
-        bool is_inbound = false;
-
-        void close(uint64_t errcode = 0)
-        {
-            if (conn)
-                conn->close_connection(errcode);
-        }
-    };
+        if (conn)
+            conn->close_connection(errcode);
+    }
 
     struct Endpoint::Impl
     {
@@ -117,6 +107,11 @@ namespace sr::link
     void Endpoint::listen(
         uint16_t port, std::span<const std::byte, 32> ed_seed, std::span<const std::byte, 32> ed_pubkey)
     {
+        // Store our RouterID for winner selection comparison (S2 fix)
+        sr::crypto::Ed25519PubKey our_pk{};
+        std::memcpy(our_pk.data(), ed_pubkey.data(), 32);
+        _our_rid = RouterID{our_pk};
+
         _impl->tls_creds = quic::GNUTLSCreds::make_from_ed_keys(
             std::string_view{reinterpret_cast<const char*>(ed_seed.data()), 32},
             std::string_view{reinterpret_cast<const char*>(ed_pubkey.data()), 32});
@@ -220,7 +215,7 @@ namespace sr::link
                     else if (alpn == "Session_Router_R" && _impl->is_relay)
                     {
                         // Relay inbound → relay_conns with winner selection
-                        auto [it, ins] = _impl->relay_conns.emplace(rid, rid < RouterID{_impl->rid_from_conn(c)});
+                        auto [it, ins] = _impl->relay_conns.emplace(rid, rid < _our_rid);
                         it->second.set_conn(std::move(ci), true);
                         if (it->second.outbound)
                             _impl->relay_bidir[rid] = std::chrono::steady_clock::now();
@@ -245,7 +240,7 @@ namespace sr::link
 
                     if (_impl->is_relay && alpn == "Session_Router_R")
                     {
-                        auto [it, ins] = _impl->relay_conns.emplace(rid, rid < RouterID{_impl->rid_from_conn(c)});
+                        auto [it, ins] = _impl->relay_conns.emplace(rid, rid < _our_rid);
                         it->second.set_conn(std::move(ci), false);
                         if (it->second.inbound)
                             _impl->relay_bidir[rid] = std::chrono::steady_clock::now();
@@ -301,7 +296,10 @@ namespace sr::link
         auto remote = quic::RemoteAddress{{reinterpret_cast<const unsigned char*>(rid.data()), 32}, addr, port};
 
         auto conn =
-            _impl->ep->connect(remote, _impl->tls_creds, quic::opt::keep_alive{10s}, quic::opt::idle_timeout{60s});
+            _impl->ep->connect(
+                remote, _impl->tls_creds,
+                quic::opt::keep_alive{_is_relay ? 10s : 20s},
+                quic::opt::idle_timeout{_is_relay ? 33s : 63s});
 
         auto ctrl = conn->open_stream<quic::BTRequestStream>();
 
