@@ -205,6 +205,24 @@ if(SR_TESTS)
         )
         target_link_libraries(test_quic_lifecycle PRIVATE sr_link sr_relay_conn Catch2::Catch2WithMain)
         add_test(NAME quic_lifecycle COMMAND test_quic_lifecycle)
+
+        add_executable(test_quic_commands
+            test/test_quic_commands.cpp
+        )
+        target_link_libraries(test_quic_commands PRIVATE sr_link sr_relay_conn Catch2::Catch2WithMain)
+        add_test(NAME quic_commands COMMAND test_quic_commands)
+
+        add_executable(test_quic_shutdown
+            test/test_quic_shutdown.cpp
+        )
+        target_link_libraries(test_quic_shutdown PRIVATE sr_link sr_relay_conn Catch2::Catch2WithMain)
+        add_test(NAME quic_shutdown COMMAND test_quic_shutdown)
+
+        add_executable(test_quic_threading
+            test/test_quic_threading.cpp
+        )
+        target_link_libraries(test_quic_threading PRIVATE sr_link sr_relay_conn Catch2::Catch2WithMain)
+        add_test(NAME quic_threading COMMAND test_quic_threading)
     endif()
 
     add_executable(test_bt
