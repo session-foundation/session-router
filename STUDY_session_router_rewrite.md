@@ -78,9 +78,13 @@ The first step was orienting to the project's development dynamics. The git hist
 - Thomas Winget: 306 commits (current secondary maintainer)
 - 40+ other contributors with smaller contributions
 
-### 2.3 Decision to Investigate Deeper
+### 2.3 Recognition
 
-The combination of factors — large codebase, shrinking contributor base, security-critical application (onion routing), and personal financial interest — justified a deeper investigation. The question shifted from "what does the code look like?" to "is this codebase healthy enough to sustain the network?"
+The initial reconnaissance revealed a codebase with specific properties: 37,000 lines of security-critical C++, 8 years of accumulated architectural decisions, a shrinking maintainer base, an ongoing transport migration that was progressing slowly, and a protocol design that was fundamentally sound underneath the accumulated technical debt.
+
+This combination made session-router an ideal subject for a capability study. A demonstration of TRUG-directed development requires a real system — one complex enough that conventional analysis takes weeks, with enough structural decay that the graph reveals problems invisible to manual review, and with enough underlying quality that a rewrite is worth doing rather than an academic exercise. Session-router had all of these properties. The personal financial stake ensured the work would be thorough — this was not a toy exercise, it was an investment in a network we hold tokens in.
+
+The question shifted from "is the code worth what it cost me?" to "can we demonstrate, on this codebase, that graph-directed development produces results that conventional development has not?"
 
 ---
 
