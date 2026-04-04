@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -24,6 +25,10 @@ namespace sr::link
     // Returns true to accept the connection, false to reject.
     // Parameters: remote RouterID, selected ALPN string.
     using KeyVerifyCallback = std::function<bool(const sr::contact::RouterID& rid, std::string_view alpn)>;
+
+    // 0-RTT ticket callbacks for session resumption
+    using TicketStoreCallback = std::function<void(const sr::contact::RouterID& rid, std::vector<unsigned char> ticket)>;
+    using TicketExtractCallback = std::function<std::optional<std::vector<unsigned char>>(const sr::contact::RouterID& rid)>;
 
     // Endpoint wraps oxen-libquic for session-router transport.
     // Manages QUIC connections to relay nodes.
@@ -60,6 +65,10 @@ namespace sr::link
         // If not set, all connections are accepted (INSECURE — for testing only).
         void set_key_verify(KeyVerifyCallback callback);
 
+        // Set 0-RTT ticket callbacks for session resumption.
+        // Must be called before listen().
+        void set_0rtt_callbacks(TicketStoreCallback store, TicketExtractCallback extract);
+
         // Connection management
         bool is_connected(const sr::contact::RouterID& to) const;
         size_t connection_count() const;
@@ -81,6 +90,10 @@ namespace sr::link
         // Close a connection
         void disconnect(const sr::contact::RouterID& rid);
 
+        // Start periodic lifecycle tickers (relay only).
+        // Must be called after listen().
+        void start_tickers();
+
         // Shut down the endpoint
         void close();
 
@@ -89,6 +102,8 @@ namespace sr::link
         DatagramHandler _dgram_handler;
         BTStreamHandler _bt_handler;
         KeyVerifyCallback _key_verify;
+        TicketStoreCallback _ticket_store;
+        TicketExtractCallback _ticket_extract;
 
         // oxen-quic internals (opaque — implementation depends on quic library)
         struct Impl;

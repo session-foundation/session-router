@@ -64,6 +64,14 @@ namespace sr::link
         // Keyed by RouterID (from remote key) for simplicity.
         std::unordered_map<RouterID, std::shared_ptr<ConnectionInfo>> inbound_clients;
 
+        // Tickers for connection lifecycle management (relay only)
+        std::shared_ptr<quic::Ticker> redundancy_ticker;
+        std::shared_ptr<quic::Ticker> dereg_ticker;
+
+        // Timing constants
+        static constexpr auto REDUNDANT_LINGER = 20s;
+        static constexpr auto DEREGGED_LINGER = std::chrono::minutes{30};
+
         explicit Impl(bool relay) : loop{std::make_shared<quic::Loop>()}, is_relay{relay} {}
 
         RouterID rid_from_conn(const quic::Connection& c) const
@@ -134,6 +142,30 @@ namespace sr::link
 
                 return _key_verify(rid, alpn);
             });
+
+        // 0-RTT session resumption
+        if (_ticket_store && _ticket_extract)
+        {
+            _impl->tls_creds->enable_outbound_0rtt(
+                [this](const quic::RemoteAddress& remote, std::vector<unsigned char> data,
+                       [[maybe_unused]] std::chrono::sys_seconds expiry) {
+                    if (remote.view_remote_key().size() != 32)
+                        return;
+                    sr::crypto::Ed25519PubKey pk{};
+                    std::memcpy(pk.data(), remote.view_remote_key().data(), 32);
+                    _ticket_store(RouterID{pk}, std::move(data));
+                },
+                [this](const quic::RemoteAddress& remote) -> std::optional<std::vector<unsigned char>> {
+                    if (remote.view_remote_key().size() != 32)
+                        return std::nullopt;
+                    sr::crypto::Ed25519PubKey pk{};
+                    std::memcpy(pk.data(), remote.view_remote_key().data(), 32);
+                    return _ticket_extract(RouterID{pk});
+                });
+
+            if (_is_relay)
+                _impl->tls_creds->enable_inbound_0rtt(0s, 48h);
+        }
 
         auto in_alpns = _is_relay
             ? quic::opt::inbound_alpns{"Session_Router_R", "Session_Router_C", "Session_Router_BS"}
@@ -333,6 +365,12 @@ namespace sr::link
 
     void Endpoint::set_key_verify(KeyVerifyCallback callback) { _key_verify = std::move(callback); }
 
+    void Endpoint::set_0rtt_callbacks(TicketStoreCallback store, TicketExtractCallback extract)
+    {
+        _ticket_store = std::move(store);
+        _ticket_extract = std::move(extract);
+    }
+
     bool Endpoint::is_connected(const RouterID& to) const
     {
         std::lock_guard lock{_impl->mtx};
@@ -411,6 +449,55 @@ namespace sr::link
         if (!ci)
             return false;
         return ci->is_inbound;
+    }
+
+    void Endpoint::start_tickers()
+    {
+        if (!_is_relay || !_impl || !_impl->loop)
+            return;
+
+        // Redundancy ticker: close bidirectional losers after linger period
+        _impl->redundancy_ticker = _impl->loop->call_every(_impl->REDUNDANT_LINGER, [this] {
+            std::lock_guard lock{_impl->mtx};
+            auto now = std::chrono::steady_clock::now();
+            for (auto it = _impl->relay_bidir.begin(); it != _impl->relay_bidir.end();)
+            {
+                auto& [rid, since] = *it;
+                if (now >= since + _impl->REDUNDANT_LINGER)
+                {
+                    if (auto rcit = _impl->relay_conns.find(rid); rcit != _impl->relay_conns.end())
+                        rcit->second.close_redundant();
+                    it = _impl->relay_bidir.erase(it);
+                }
+                else
+                    ++it;
+            }
+        });
+
+        // Deregistration ticker: close connections to dead relays
+        _impl->dereg_ticker = _impl->loop->call_every(1min, [this] {
+            std::lock_guard lock{_impl->mtx};
+            auto now = std::chrono::steady_clock::now();
+
+            // Close connections dead longer than DEREGGED_LINGER
+            for (auto it = _impl->pending_dead.begin(); it != _impl->pending_dead.end();)
+            {
+                auto& [rid, dead_since] = *it;
+                if (now >= dead_since + _impl->DEREGGED_LINGER)
+                {
+                    if (auto rcit = _impl->relay_conns.find(rid); rcit != _impl->relay_conns.end())
+                    {
+                        rcit->second.close_all();
+                        _impl->relay_conns.erase(rcit);
+                        _impl->relay_bidir.erase(rid);
+                    }
+                    _impl->pending_outbound.erase(rid);
+                    it = _impl->pending_dead.erase(it);
+                }
+                else
+                    ++it;
+            }
+        });
     }
 
     uint16_t Endpoint::local_port() const
