@@ -206,6 +206,18 @@ if(SR_TESTS)
         target_link_libraries(test_quic_lifecycle PRIVATE sr_link sr_relay_conn Catch2::Catch2WithMain)
         add_test(NAME quic_lifecycle COMMAND test_quic_lifecycle)
 
+        add_executable(test_quic_keys
+            test/test_quic_keys.cpp
+        )
+        target_link_libraries(test_quic_keys PRIVATE sr_link sr_relay_conn Catch2::Catch2WithMain)
+        add_test(NAME quic_keys COMMAND test_quic_keys)
+
+        add_executable(test_quic_dedup
+            test/test_quic_dedup.cpp
+        )
+        target_link_libraries(test_quic_dedup PRIVATE sr_link sr_relay_conn Catch2::Catch2WithMain)
+        add_test(NAME quic_dedup COMMAND test_quic_dedup)
+
         add_executable(test_quic_alpn
             test/test_quic_alpn.cpp
         )
