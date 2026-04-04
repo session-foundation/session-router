@@ -206,6 +206,12 @@ if(SR_TESTS)
         target_link_libraries(test_quic_lifecycle PRIVATE sr_link sr_relay_conn Catch2::Catch2WithMain)
         add_test(NAME quic_lifecycle COMMAND test_quic_lifecycle)
 
+        add_executable(test_quic_alpn
+            test/test_quic_alpn.cpp
+        )
+        target_link_libraries(test_quic_alpn PRIVATE sr_link sr_relay_conn Catch2::Catch2WithMain)
+        add_test(NAME quic_alpn COMMAND test_quic_alpn)
+
         add_executable(test_quic_commands
             test/test_quic_commands.cpp
         )

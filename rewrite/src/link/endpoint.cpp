@@ -21,6 +21,8 @@ namespace sr::link
         std::shared_ptr<quic::Connection> conn;
         std::shared_ptr<quic::Datagrams> datagrams;
         std::shared_ptr<quic::BTRequestStream> control_stream;
+        std::string alpn;  // Selected ALPN for this connection
+        bool is_inbound = false;
     };
 
     struct Endpoint::Impl
@@ -99,6 +101,8 @@ namespace sr::link
                     ci.conn = c.shared_from_this();
                     ci.datagrams = c.datagrams();
                     ci.control_stream = std::move(ctrl);
+                    ci.alpn = std::string{c.selected_alpn()};
+                    ci.is_inbound = true;
                 }
             }},
             quic::connection_closed_callback{[this](quic::Connection& c, [[maybe_unused]] uint64_t ec) {
@@ -133,6 +137,8 @@ namespace sr::link
             ci.conn = conn;
             ci.datagrams = conn->datagrams();
             ci.control_stream = std::move(ctrl);
+            ci.alpn = _is_relay ? "Session_Router_R" : "Session_Router_C";
+            ci.is_inbound = false;
         }
     }
 
@@ -212,6 +218,24 @@ namespace sr::link
                 it->second.conn->close_connection();
             _impl->connections.erase(it);
         }
+    }
+
+    std::string Endpoint::connection_alpn(const RouterID& rid) const
+    {
+        std::lock_guard lock{_impl->mtx};
+        auto it = _impl->connections.find(rid);
+        if (it == _impl->connections.end())
+            return {};
+        return it->second.alpn;
+    }
+
+    bool Endpoint::is_inbound_connection(const RouterID& rid) const
+    {
+        std::lock_guard lock{_impl->mtx};
+        auto it = _impl->connections.find(rid);
+        if (it == _impl->connections.end())
+            return false;
+        return it->second.is_inbound;
     }
 
     uint16_t Endpoint::local_port() const

@@ -59,6 +59,15 @@ namespace sr::link
         // Only valid after listen() has been called.
         uint16_t local_port() const;
 
+        // Returns whether this endpoint is in relay mode
+        bool is_relay() const { return _is_relay; }
+
+        // Returns the ALPN string for a connection, or empty if not connected
+        std::string connection_alpn(const sr::contact::RouterID& rid) const;
+
+        // Returns whether a connection is inbound
+        bool is_inbound_connection(const sr::contact::RouterID& rid) const;
+
         // Close a connection
         void disconnect(const sr::contact::RouterID& rid);
 
