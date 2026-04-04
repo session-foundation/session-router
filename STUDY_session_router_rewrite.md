@@ -414,145 +414,71 @@ The study demonstrates the full lifecycle from curiosity to contribution:
 | Wire format integration | branch: `issue/1232-wire-format-fix` | 7 commits |
 | Upstream PRs | #37, #38, #39 | 3 PRs |
 | Analysis graph (internal) | Proprietary TRUG | 91 nodes, 366 edges |
-| Clean room AAA specification | Planned — TRUGS LLC IP | TBD |
-| Go reimplementation | Planned — GitHub Codespace + Copilot | TBD |
+| QUIC transport test suite | `rewrite/test/test_quic_*.cpp` (11 files) | 76 test cases |
+| QUIC layer TRUG graph | `quic_layer.trug.json` | 37 nodes, 38 edges |
+| QUIC hardening AAA | `AAA_1281_quic_test_suite.md` | 112 tests designed, 3 audits |
+| relay_conn struct | `rewrite/include/sr/link/relay_conn.hpp` | Bidirectional dedup |
+| ConnectionInfo | `rewrite/include/sr/link/connection_info.hpp` | Shared connection wrapper |
 
 ---
 
-## 11. Forward Direction: Two-Phase Strategy
+## 11. QUIC Transport — Implementation
 
-### 11.1 Overview
+### 11.1 Approach
 
-The work proceeds in two phases with distinct goals, licenses, and audiences:
+We set out to improve the QUIC transport layer through testing. The approach was test-first: design a comprehensive test suite using the TRUG graph as the specification, write the tests, then build the code to pass them.
 
-| | Phase 1 | Phase 2 |
-|---|---------|---------|
-| **Goal** | Complete, production-ready C++ rewrite | Clean room Go reimplementation |
-| **Language** | C++20 (same as upstream) | Go |
-| **Agent** | Claude Code (Anthropic Opus) | GitHub Copilot in Codespace |
-| **License** | GPL-3.0 (gift to Session Foundation) | Chosen by owner (TRUGS LLC) |
-| **Wire compatible** | Yes — runs on Session network | Yes — same protocol |
-| **Relationship to upstream** | Derivative work, freely contributed | Independent work from protocol spec |
+### 11.2 Test Suite
 
-Phase 1 proves the system works and establishes credibility. Phase 2 produces the business asset.
+76 test cases across 11 categories, organized by the TRUG graph's node structure:
 
-### 11.2 Phase 1: Complete the C++ Rewrite
+| Category | Tests | Level | What It Covers |
+|----------|-------|-------|---------------|
+| relay_conn struct | 15 | Unit | Winner selection, set_conn, close, close_redundant |
+| Connection maps | 9 | Loopback | 6-map data model queries through public API |
+| ALPN routing | 8 | Loopback | Per-ALPN connection storage, direction tracking |
+| Key verification | 5 | Loopback | Registered relay acceptance, unregistered rejection |
+| Bidirectional dedup | 5 | Loopback | Simultaneous connections, data flow, partial disconnect |
+| Connection lifecycle | 10 | Loopback | Pending → established → closed, datagrams, BTStream |
+| Command dispatch | 7 | Loopback | Send/receive commands, large payloads, bidirectional |
+| Shutdown and safety | 6 | Loopback | Ordered teardown, double stop, rapid create-destroy |
+| Tickers | 4 | Loopback | Idle timeout stability, keep-alive, rapid reconnect |
+| 0-RTT | 3 | Loopback | Reconnection after disconnect, multiple cycles |
+| Threading | 4 | Loopback | Concurrent access, send+query interleave, stress |
 
-**Objective:** Deliver a fully working session-router replacement to the Session Foundation. Production-ready, all 6 layers functional, QUIC transport hardened, comprehensive tests, security audited.
+All 76 tests pass. 19 test suites total (including the 9 pre-existing suites for Layers 0-3).
 
-**Current state:** Layers 0-3 complete (crypto, contact, path, session). Layer 4 (Link/QUIC) has basic integration but 7 missing features and 1 critical bug identified in AAA_1234. Layer 5 (Node) has structure but needs integration with hardened transport.
+### 11.3 Code Delivered
 
-**Remaining work:**
+The test-first approach drove the implementation of production architecture:
 
-| Item | Scope | Status |
-|------|-------|--------|
-| Fix outbound BTStream handler bug | Critical — one-way communication | Identified, not fixed |
-| Bidirectional relay connection dedup | Required for relay clustering | Designed in AAA_1234 |
-| Per-ALPN connection routing | Relay vs client vs bootstrap | Designed in AAA_1234 |
-| Connection lifecycle management | Pending tracking, dead cleanup | Designed in AAA_1234 |
-| Thread model alignment | Mutex → event loop dispatch | Designed in AAA_1234 |
-| Key verification on inbound connections | Security — currently accepts all | Designed in AAA_1234 |
-| 0-RTT support | Performance — reconnection speed | Designed in AAA_1234 |
-| Integration tests | Two-instance relay-to-relay | Planned |
-| Security audit cycle 4 | Post-hardening review | Planned |
-| Differential testing | Upstream vs rewrite on same inputs | Planned (issue #1253) |
+| Feature | What Was Built |
+|---------|---------------|
+| **relay_conn struct** | Bidirectional connection pair with winner selection (`inbound_wins = remote_rid < our_rid`), `close_redundant()` with `CONN_CLOSE_REDUNDANT=6` |
+| **6-map connection model** | `relay_conns`, `relay_bidir`, `pending_outbound`, `pending_dead`, `client_conns`, `inbound_clients` — replacing the original flat map |
+| **ALPN routing** | `Session_Router_R` → `relay_conns`, `Session_Router_C` → `client_conns`/`inbound_clients`, `Session_Router_BS` → untracked |
+| **Key verification** | `set_key_verify()` callback — relay ALPN requires registered RouterID, client ALPN bypasses |
+| **Tickers** | Redundancy ticker (close bidirectional losers after 20s), deregistration ticker (close dead relays after 30min) |
+| **0-RTT** | `set_0rtt_callbacks()` — ticket store/extract by RouterID, 48h inbound validity for relays |
+| **Per-ALPN timeouts** | Relay: 10s keep-alive, 33s idle. Client: 20s keep-alive, 63s idle |
+| **Ordered shutdown** | relay_conns → pending → client → inbound → dead → endpoint → loop |
 
-**Outcome:** A GPL-3.0 gift. The complete, working system is contributed to the Session ecosystem. It demonstrates what graph-directed analysis can produce and establishes TRUGS LLC's capability and good faith.
+### 11.4 Security Audit
 
-### 11.3 Phase 2: Clean Room Go Reimplementation
+Phase 8 reviewed all changes for security implications. 8 findings, 4 fixed:
 
-**Objective:** Build a privately owned implementation of the LLARP onion routing protocol in Go. Wire-compatible with the Session network. Owned by TRUGS LLC.
+| # | Severity | Finding | Resolution |
+|---|----------|---------|------------|
+| S2 | **HIGH** | Winner selection compared `remote < remote` (always false) — wrong RouterID in comparison | Fixed: store our RouterID from `listen()`, compare `remote < ours` |
+| S3 | **MEDIUM** | `relay_conn::close()` dropped shared_ptr without closing QUIC connection | Fixed: call `close(errcode)` before `reset()` |
+| S8 | **MEDIUM** | Hardcoded 10s/60s timeouts for all connection types | Fixed: per-ALPN values matching upstream spec |
+| — | **MEDIUM** | `ConnectionInfo` defined inside endpoint.cpp, inaccessible to relay_conn | Fixed: extracted to `connection_info.hpp` |
+| S1 | MEDIUM | Datagram handler captures `this` without canary (lifetime safety) | Documented — inherited from upstream |
+| S5 | LOW | Ticker callbacks lack canary | Documented — destruction order safe |
+| S6 | LOW | No double-listen guard | Documented |
+| S7 | LOW | No pre-listen-connect guard | Documented |
 
-**Clean room wall:**
-
-| Role | Entity | Access |
-|------|--------|--------|
-| **Specification author** | Xepayac (human) | Read upstream source, built analysis graph, wrote C++ rewrite |
-| **Implementer** | GitHub Copilot in Codespace | Sees ONLY the AAA specification file — never the upstream C++ or the GPL rewrite |
-
-The specification author writes a recursive AAA file describing WHAT the protocol does — message formats, crypto operations, state machines, wire encoding. The AAA does not contain upstream code, internal class names, or references to the GPL codebase. Protocols are not copyrightable; specific expressions are. The implementer (Copilot) produces its own expression from the specification alone.
-
-**Why Go:**
-
-- **Single binary deployment.** No runtime dependencies. No cmake, no submodules, no platform ifdefs.
-- **Native concurrency.** Goroutines + channels eliminate the entire class of threading problems (NullMutex, god object, single-thread invariant) that make the C++ codebase unmaintainable.
-- **Mature QUIC.** quic-go (used by Cloudflare in production, powers HTTP/3) vs oxen-libquic (immature, crashing, multiple emergency version bumps).
-- **Standard library crypto.** `golang.org/x/crypto` provides NaCl boxes, ChaCha20-Poly1305, BLAKE2b, Ed25519, X25519 natively — no libsodium dependency.
-- **Built-in race detector.** `go test -race` catches the exact class of bugs that the upstream's NullMutex hides.
-- **Cross-compilation.** `GOOS=linux GOARCH=amd64 go build` — one command, any platform.
-- **Maximum clean room distance.** Go and C++ share zero syntactic similarity. Accidental code resemblance is impossible.
-
-**Recursive AAA structure:**
-
-```
-Top-Level AAA: LLARP Onion Router in Go
-├── AAA: Crypto Layer (sealed boxes, AEAD, DH, key derivation, ML-KEM, session keys)
-├── AAA: Contact Layer (RouterID, RelayContact, NodeDB, BT wire encoding)
-├── AAA: Path Layer (onion construction, hop chaining, nonce XOR chain, frame MAC)
-├── AAA: Session Layer (E2E channels, init/accept handshake, k1/k2 key split)
-├── AAA: Transport Layer (QUIC via quic-go, ALPN routing, connection lifecycle, 0-RTT)
-├── AAA: Node Layer (TUN device, DNS handler, config, event loop, tick)
-└── AAA: Exit Layer (NAT, route management, IP forwarding)
-```
-
-Each sub-AAA follows the 9 phases: VISION → FEASIBILITY → SPECIFICATIONS → ARCHITECTURE → VALIDATION → CODING → TESTING → AUDIT → DEPLOYMENT.
-
-### 11.4 Why Phase 1 Before Phase 2
-
-The C++ rewrite must be completed first for three reasons:
-
-1. **The specification requires complete understanding.** Writing a protocol spec precise enough for a different AI agent to implement requires knowing every edge case, every byte ordering, every state transition. Completing Phase 1 — making the system actually work on the live network — surfaces the unknowns that static analysis cannot reach.
-
-2. **Credibility.** Giving Session Foundation a complete, working, GPL-3.0 implementation establishes that we are contributors, not competitors. The Go reimplementation is positioned as protocol diversity strengthening the network — not an adversarial fork.
-
-3. **Validation.** The C++ rewrite serves as the reference implementation for the Go version. Differential testing (identical inputs, compare outputs) can verify the Go implementation against the C++ one without referencing the upstream code.
-
-### 11.5 What This Proves
-
-The two-phase strategy serves as a comprehensive capability study:
-
-1. **TRUG analysis** — Can graph-directed analysis produce understanding deep enough to rewrite a 37,000-line system? (Phase 1 proves this.)
-
-2. **AAA as cross-agent specification format.** Can an AAA file drive a *different* AI agent (Copilot, not Claude) to produce a working implementation in a *different* language (Go, not C++)? (Phase 2 proves this.)
-
-3. **TRUG analysis produces transferable understanding.** The 91-node, 366-edge graph produced knowledge deep enough to write a protocol specification that a third party can implement. The analysis system doesn't just help one person understand — it produces artifacts that transfer understanding to any agent.
-
-4. **Full lifecycle.** Curiosity → analysis → understanding → C++ rewrite → protocol specification → clean room Go implementation. The graph is the bridge between "I read their code" and "I own my own code."
-
-### 11.6 Disclosure Strategy
-
-This study — the complete document — will be sent to the Session Foundation before the clean room implementation begins.
-
-**Rationale:** Radical transparency eliminates any future claim of deception or bad faith. The Session Foundation will receive:
-
-- The full analysis methodology (three passes, graph construction)
-- The complete C++ rewrite as a GPL-3.0 contribution (Phase 1)
-- The clean room wall definition (spec author vs implementer)
-- The choice of language (Go), AI agent (Copilot), and environment (Codespace)
-- The AAA specification format that will drive Phase 2
-- This study itself — every detail of what was done, how, and why
-
-**Two outcomes, both acceptable:**
-
-1. **Session Foundation challenges the clean room.** They have every detail needed to build a legal case. If a court finds that a protocol specification written by someone who read GPL source code, implemented by a separate AI agent in a different language, constitutes a derivative work — that would be a significant expansion of copyright law. The burden of proof is on the challenger, and the clean room methodology is well-established case law (see: *Sega v. Accolade*, *Sony v. Connectix*).
-
-2. **Session Foundation does not challenge.** Silence after full disclosure with reasonable time to respond constitutes acquiescence. The clean room implementation proceeds with a documented, unchallenged legal foundation.
-
-In either case, the GPL rewrite (Phase 1) remains a GPL-3.0 contribution to the Session ecosystem. It was offered as a gift and it stays a gift. The Go implementation (Phase 2) is a separate, independent work derived from a protocol specification — not from GPL source code.
-
-### 11.7 License Outcome
-
-**Phase 1 (C++ rewrite):**
-- GPL-3.0, contributed to Session Foundation
-- Derivative work of the upstream codebase
-- Gift — no strings attached
-
-**Phase 2 (Go reimplementation):**
-- The AAA specification is TRUGS LLC intellectual property
-- The Go implementation is owned by TRUGS LLC
-- Licensed under Apache 2.0 — permissive, no GPL obligation
-- The upstream GPL code was never seen by the implementer
-- Full disclosure to the upstream project establishes good faith and starts any applicable limitation period
+The HIGH finding (S2) would have caused all bidirectional connections to select the wrong winner — breaking relay mesh connectivity on a live network. It was caught by the audit, not by tests — the tests passed because they didn't exercise the winner selection path through real relay_conns. This demonstrates why security audits are necessary even with comprehensive test coverage.
 
 ---
 
@@ -733,8 +659,12 @@ A graph-based analysis system transformed a Friday evening's frustration into a 
 
 The upstream codebase is the natural result of 8 years of development by a changing team under real-world constraints. The circular dependencies emerged gradually. The dead code accumulated one TODO at a time. The god object grew because it was the path of least resistance. But explanations are not excuses. A security-critical application with zero fuzz testing, acknowledged vulnerabilities in TODO comments, and broken core features is not acceptable — regardless of how it got that way.
 
-The analysis system's value is that it makes the cumulative weight of these decisions visible in a single graph — and that visibility makes informed action possible. This study documents that action.
+The analysis system's value is that it makes the cumulative weight of these decisions visible in a single graph — and that visibility makes informed action possible.
+
+The QUIC transport hardening (Section 11) demonstrates the approach at its most detailed: a TRUG graph of 37 nodes and 38 edges drove the design of 76 tests, which drove the implementation of 6 production-architecture features, which were then audited — catching a HIGH severity winner-selection bug that tests alone missed. The entire cycle — graph → tests → code → audit — completed in a single session.
+
+The code is GPL-3.0 and available at `github.com/Xepayac/session-router`.
 
 ---
 
-*This study was produced using TRUG (Traceable Recursive Universal Graph Specification). The analysis graph, rewrite implementation, and all audit documentation are available in the Xepayac/session-router repository.*
+*This study was produced using TRUG (Traceable Recursive Universal Graph Specification). The analysis graph, rewrite implementation, test suite, and all audit documentation are available in the Xepayac/session-router repository.*
