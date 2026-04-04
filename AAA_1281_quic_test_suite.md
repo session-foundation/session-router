@@ -564,5 +564,100 @@ This is the ONLY required upstream code change for testability.
 
 ---
 
+## Audit 2 — Insidious Weirdness (2026-04-03)
+
+Second pass reading upstream code with adversarial eyes. Looking for things that are correct-but-surprising, latent bugs, race conditions, and test harness traps.
+
+### W1: call_get FROM the router loop INTO the router loop (CRITICAL for harness)
+
+`ctrl_stream_impl()` (endpoint.cpp:462) asserts `router.loop().inside()` — it runs in the router loop. Then calls `get_relay_conn()` (line 468) which does `router._jq->call_get(...)` (line 200). That's a synchronous call_get from the router loop INTO itself. This should deadlock.
+
+**Implication:** The real JobQueue must special-case call_get-from-inside-the-loop to execute inline. Our MockJobQueue MUST replicate this behavior or ctrl_stream_impl tests will deadlock. This is the #1 trap in the entire test plan.
+
+**Test:** 11.4 — call_get from inside loop executes inline without deadlock.
+
+### W2: on_conn_closed checks BOTH inbound AND outbound (not else-if)
+
+endpoint.cpp:852-865: The inbound and outbound `reference_id` checks are both `if`, not `else if`. A single close could theoretically match both branches. Defensive, but means close() could be called twice on the same relay_conn from one event.
+
+**Test:** 6.12 — Single close event does not double-close relay_conn.
+
+### W3: Outbound make_control called from router loop on network-loop object
+
+endpoint.cpp:486: `ctrl_stream_impl()` runs in router loop, calls `make_control()` which calls `conn.open_stream()` — a network-loop object. This cross-loop access is safe only because the connection is pre-establishment (in pending_outbound). If the connection establishes between `endpoint->connect()` and `make_control()`, the control stream races with network callbacks.
+
+**Test:** 6.13 — Rapid connect + command send: verify control stream exists before establishment completes.
+
+### W4: path_build handler captures remote by value; others use m.conn_rid()
+
+link_manager.cpp:87: `path_build` captures `remote` variant by value. All other handlers extract sender identity from `m.conn_rid()` at call time. This asymmetry means path_build knows WHO sent it at registration time, while others determine it at call time.
+
+**Test:** 8.13 — path_build handler receives correct remote identity (value capture, not message extraction).
+
+### W5: Two completely different control stream creation paths
+
+Outbound: control stream created in `ctrl_stream_impl()` BEFORE connection establishment, stored in pending_outbound, handlers registered BEFORE establishment. Inbound: control stream created in `on_conn_established()` DURING establishment callback, handlers registered AT establishment.
+
+**Test:** 8.14 — Commands registered on outbound control stream work AFTER connection establishes.
+
+### W6: Datagram handler lacks canary protection (POTENTIAL UPSTREAM BUG)
+
+endpoint.cpp:92-97: Datagram callback captures `[this]` without canary check. `on_conn_closed` (line 831) properly uses `alive = canary`. If Endpoint is destroyed while a datagram is queued in the network loop, the callback fires with dangling `this`.
+
+**Test:** 9.6 — Datagram in-flight during Endpoint destruction: no crash (may expose upstream bug).
+
+### W7: close_redundant iterates relay_bidir while triggering async closes
+
+endpoint.cpp:213-229: `close_redundant()` iterates relay_bidir, calls Connection::close() which triggers on_conn_closed via network loop → router._jq->call(). The callback could modify relay_conns/relay_bidir. Safe only because the close-callback transfer is asynchronous (goes through call(), not call_get), so it queues AFTER the iteration completes.
+
+**Test:** 7.9 — close_redundant during active connections: iteration completes without crash.
+
+### W8: find_cc legacy path leaks requests (UPSTREAM BUG)
+
+link_manager.cpp:649: In the legacy `lookup_index < 0` path, when all forwarded find_cc requests fail, the counter logic `if (--*remaining == 0) return;` returns WITHOUT calling `respond()`. The original request hangs forever. The intended behavior should be to call `respond(error)` when all have failed, but the condition check is inverted — it returns early (thinking more responses are coming) when actually this was the last one.
+
+**This is a confirmed bug in the upstream.** Not in our test scope (it's in Manager protocol logic, not QUIC transport), but document it as a finding.
+
+### Revised Test Count (Post Audit 2)
+
+| Category | Post-Audit-1 | Added (W1-W8) | Final |
+|----------|-------------|---------------|-------|
+| 6. Connection lifecycle | 11 | +2 (W2: 6.12, W3: 6.13) | 13 |
+| 7. Tickers | 8 | +1 (W7: 7.9) | 9 |
+| 8. Command dispatch | 12 | +2 (W4: 8.13, W5: 8.14) | 14 |
+| 9. Shutdown and safety | 5 | +1 (W6: 9.6) | 6 |
+| 11. Threading | 3 | +1 (W1: 11.4) | 4 |
+| Others | 53 | — | 53 |
+| **Total** | **99** | **+7** | **106** |
+
+### Upstream Bugs Found
+
+| # | Location | Severity | Description |
+|---|----------|----------|-------------|
+| B1 | endpoint.cpp:92-97 | MEDIUM | Datagram handler captures `this` without canary — use-after-free on Endpoint destruction during datagram processing |
+| B2 | link_manager.cpp:649 | LOW | find_cc legacy path (`lookup_index < 0`): when all forwarded requests fail, `respond()` never called — request hangs forever |
+
+### Critical Harness Requirement (from W1)
+
+```cpp
+struct MockJobQueue {
+    quic::Loop& loop;
+    
+    template <typename F> void call(F&& f) { loop.call(std::forward<F>(f)); }
+    
+    template <typename F> auto call_get(F&& f) {
+        // CRITICAL: if already inside the loop, execute inline (not queued)
+        // Otherwise deadlock when ctrl_stream_impl calls get_relay_conn
+        if (loop.inside())
+            return f();
+        return loop.call_get(std::forward<F>(f));
+    }
+};
+```
+
+This is the single most important implementation detail in the entire harness.
+
+---
+
 *Analysis source: quic_layer.trug.json (37 nodes, 38 edges)*
 *Supersedes: AAA_1234_quic_transport.md*
