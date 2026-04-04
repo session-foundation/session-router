@@ -417,15 +417,51 @@ The study demonstrates the full lifecycle from curiosity to contribution:
 
 ---
 
-## 11. Forward Direction: Clean Room Reimplementation
+## 11. Forward Direction: Two-Phase Strategy
 
-### 11.1 Objective
+### 11.1 Overview
 
-Build a privately owned encrypted messaging client for the SaltWind RPG ecosystem and chatbot distribution. The system will be a web application where players interact with the game world and AI chatbot through end-to-end encrypted channels — using the cryptographic protocol knowledge gained from the session-router analysis, without carrying GPL obligations.
+The work proceeds in two phases with distinct goals, licenses, and audiences:
 
-### 11.2 Clean Room Methodology
+| | Phase 1 | Phase 2 |
+|---|---------|---------|
+| **Goal** | Complete, production-ready C++ rewrite | Clean room Go reimplementation |
+| **Language** | C++20 (same as upstream) | Go |
+| **Agent** | Claude Code (Anthropic Opus) | GitHub Copilot in Codespace |
+| **License** | GPL-3.0 (gift to Session Foundation) | Chosen by owner (TRUGS LLC) |
+| **Wire compatible** | Yes — runs on Session network | Yes — same protocol |
+| **Relationship to upstream** | Derivative work, freely contributed | Independent work from protocol spec |
 
-The reimplementation uses a formal clean room wall:
+Phase 1 proves the system works and establishes credibility. Phase 2 produces the business asset.
+
+### 11.2 Phase 1: Complete the C++ Rewrite
+
+**Objective:** Deliver a fully working session-router replacement to the Session Foundation. Production-ready, all 6 layers functional, QUIC transport hardened, comprehensive tests, security audited.
+
+**Current state:** Layers 0-3 complete (crypto, contact, path, session). Layer 4 (Link/QUIC) has basic integration but 7 missing features and 1 critical bug identified in AAA_1234. Layer 5 (Node) has structure but needs integration with hardened transport.
+
+**Remaining work:**
+
+| Item | Scope | Status |
+|------|-------|--------|
+| Fix outbound BTStream handler bug | Critical — one-way communication | Identified, not fixed |
+| Bidirectional relay connection dedup | Required for relay clustering | Designed in AAA_1234 |
+| Per-ALPN connection routing | Relay vs client vs bootstrap | Designed in AAA_1234 |
+| Connection lifecycle management | Pending tracking, dead cleanup | Designed in AAA_1234 |
+| Thread model alignment | Mutex → event loop dispatch | Designed in AAA_1234 |
+| Key verification on inbound connections | Security — currently accepts all | Designed in AAA_1234 |
+| 0-RTT support | Performance — reconnection speed | Designed in AAA_1234 |
+| Integration tests | Two-instance relay-to-relay | Planned |
+| Security audit cycle 4 | Post-hardening review | Planned |
+| Differential testing | Upstream vs rewrite on same inputs | Planned (issue #1253) |
+
+**Outcome:** A GPL-3.0 gift. The complete, working system is contributed to the Session ecosystem. It demonstrates what graph-directed analysis can produce and establishes TRUGS LLC's capability and good faith.
+
+### 11.3 Phase 2: Clean Room Go Reimplementation
+
+**Objective:** Build a privately owned implementation of the LLARP onion routing protocol in Go. Wire-compatible with the Session network. Owned by TRUGS LLC.
+
+**Clean room wall:**
 
 | Role | Entity | Access |
 |------|--------|--------|
@@ -434,43 +470,52 @@ The reimplementation uses a formal clean room wall:
 
 The specification author writes a recursive AAA file describing WHAT the protocol does — message formats, crypto operations, state machines, wire encoding. The AAA does not contain upstream code, internal class names, or references to the GPL codebase. Protocols are not copyrightable; specific expressions are. The implementer (Copilot) produces its own expression from the specification alone.
 
-### 11.3 Why Go
+**Why Go:**
 
-The reimplementation will be written in Go:
-
-- **Single binary deployment.** No runtime dependencies. The web app, messaging server, and crypto stack compile to one binary.
-- **Native concurrency.** Goroutines handle connection multiplexing without the threading model problems that plagued the upstream C++ (NullMutex, invisible single-thread invariant).
-- **Standard library crypto.** `golang.org/x/crypto` provides NaCl boxes, ChaCha20-Poly1305, BLAKE2b, Ed25519, X25519 — no libsodium dependency.
-- **Native HTTP/WebSocket.** The web layer uses Go's standard library, not an IP-level tunnel.
-- **Cross-compilation.** Build for every deployment target from one machine.
+- **Single binary deployment.** No runtime dependencies. No cmake, no submodules, no platform ifdefs.
+- **Native concurrency.** Goroutines + channels eliminate the entire class of threading problems (NullMutex, god object, single-thread invariant) that make the C++ codebase unmaintainable.
+- **Mature QUIC.** quic-go (used by Cloudflare in production, powers HTTP/3) vs oxen-libquic (immature, crashing, multiple emergency version bumps).
+- **Standard library crypto.** `golang.org/x/crypto` provides NaCl boxes, ChaCha20-Poly1305, BLAKE2b, Ed25519, X25519 natively — no libsodium dependency.
+- **Built-in race detector.** `go test -race` catches the exact class of bugs that the upstream's NullMutex hides.
+- **Cross-compilation.** `GOOS=linux GOARCH=amd64 go build` — one command, any platform.
 - **Maximum clean room distance.** Go and C++ share zero syntactic similarity. Accidental code resemblance is impossible.
-- **Aligned with existing architecture decision.** Python handles storage (trugs-store/tools). Go handles orchestration, execution, and everything in products.
 
-### 11.4 Recursive AAA
-
-The specification will use the AAA (Architecture-Audit-Action) format — the same 9-phase methodology used throughout TRUGS development. The top-level AAA defines the system. It instructs Copilot to decompose into sub-AAAs for each component:
+**Recursive AAA structure:**
 
 ```
-Top-Level AAA
-├── AAA: Crypto Layer (sealed boxes, AEAD, key derivation, session keys)
-├── AAA: Messaging Protocol (session handshake, message framing, E2E encryption)
-├── AAA: Transport (WebSocket server, connection lifecycle, reconnection)
-├── AAA: Web Application (HTTP API, auth, rate limiting, static assets)
-├── AAA: Chatbot Integration (SaltWind game API, conversation management)
-└── AAA: Storage (message persistence, TRUG-backed conversation graph)
+Top-Level AAA: LLARP Onion Router in Go
+├── AAA: Crypto Layer (sealed boxes, AEAD, DH, key derivation, ML-KEM, session keys)
+├── AAA: Contact Layer (RouterID, RelayContact, NodeDB, BT wire encoding)
+├── AAA: Path Layer (onion construction, hop chaining, nonce XOR chain, frame MAC)
+├── AAA: Session Layer (E2E channels, init/accept handshake, k1/k2 key split)
+├── AAA: Transport Layer (QUIC via quic-go, ALPN routing, connection lifecycle, 0-RTT)
+├── AAA: Node Layer (TUN device, DNS handler, config, event loop, tick)
+└── AAA: Exit Layer (NAT, route management, IP forwarding)
 ```
 
-Each sub-AAA follows the same 9 phases: VISION → FEASIBILITY → SPECIFICATIONS → ARCHITECTURE → VALIDATION → CODING → TESTING → AUDIT → DEPLOYMENT. Copilot generates its own plans, its own architecture, its own code — all from the specification. The output is Copilot's expression, not a derivative of GPL code.
+Each sub-AAA follows the 9 phases: VISION → FEASIBILITY → SPECIFICATIONS → ARCHITECTURE → VALIDATION → CODING → TESTING → AUDIT → DEPLOYMENT.
+
+### 11.4 Why Phase 1 Before Phase 2
+
+The C++ rewrite must be completed first for three reasons:
+
+1. **The specification requires complete understanding.** Writing a protocol spec precise enough for a different AI agent to implement requires knowing every edge case, every byte ordering, every state transition. Completing Phase 1 — making the system actually work on the live network — surfaces the unknowns that static analysis cannot reach.
+
+2. **Credibility.** Giving Session Foundation a complete, working, GPL-3.0 implementation establishes that we are contributors, not competitors. The Go reimplementation is positioned as protocol diversity strengthening the network — not an adversarial fork.
+
+3. **Validation.** The C++ rewrite serves as the reference implementation for the Go version. Differential testing (identical inputs, compare outputs) can verify the Go implementation against the C++ one without referencing the upstream code.
 
 ### 11.5 What This Proves
 
-This phase serves as a second capability study:
+The two-phase strategy serves as a comprehensive capability study:
 
-1. **AAA as cross-agent specification format.** If Copilot — a different AI agent with different training, different context limits, different architectural reasoning — can produce a working system from an AAA file alone, then AAA is a sufficient specification language for any LLM agent. Not just Claude.
+1. **TRUG analysis** — Can graph-directed analysis produce understanding deep enough to rewrite a 37,000-line system? (Phase 1 proves this.)
 
-2. **TRUG analysis produces transferable understanding.** The 91-node, 366-edge graph produced knowledge deep enough to write a protocol specification that a third party can implement. The analysis system doesn't just help YOU understand — it produces artifacts that transfer understanding to others.
+2. **AAA as cross-agent specification format.** Can an AAA file drive a *different* AI agent (Copilot, not Claude) to produce a working implementation in a *different* language (Go, not C++)? (Phase 2 proves this.)
 
-3. **Graph-directed development lifecycle.** Curiosity → analysis → understanding → specification → clean room implementation. The graph is the bridge between "I read their code" and "I own my own code."
+3. **TRUG analysis produces transferable understanding.** The 91-node, 366-edge graph produced knowledge deep enough to write a protocol specification that a third party can implement. The analysis system doesn't just help one person understand — it produces artifacts that transfer understanding to any agent.
+
+4. **Full lifecycle.** Curiosity → analysis → understanding → C++ rewrite → protocol specification → clean room Go implementation. The graph is the bridge between "I read their code" and "I own my own code."
 
 ### 11.6 Disclosure Strategy
 
@@ -479,10 +524,10 @@ This study — the complete document — will be sent to the Session Foundation 
 **Rationale:** Radical transparency eliminates any future claim of deception or bad faith. The Session Foundation will receive:
 
 - The full analysis methodology (three passes, graph construction)
+- The complete C++ rewrite as a GPL-3.0 contribution (Phase 1)
 - The clean room wall definition (spec author vs implementer)
 - The choice of language (Go), AI agent (Copilot), and environment (Codespace)
-- The AAA specification format that will drive the implementation
-- The intended use case (SaltWind game client, chatbot distribution)
+- The AAA specification format that will drive Phase 2
 - This study itself — every detail of what was done, how, and why
 
 **Two outcomes, both acceptable:**
@@ -491,15 +536,21 @@ This study — the complete document — will be sent to the Session Foundation 
 
 2. **Session Foundation does not challenge.** Silence after full disclosure with reasonable time to respond constitutes acquiescence. The clean room implementation proceeds with a documented, unchallenged legal foundation.
 
-In either case, the GPL rewrite (3,781 lines of C++20) remains a GPL-3.0 contribution to the Session ecosystem. It was offered as a gift and it stays a gift. The Go implementation is a separate, independent work derived from a protocol specification — not from GPL source code.
+In either case, the GPL rewrite (Phase 1) remains a GPL-3.0 contribution to the Session ecosystem. It was offered as a gift and it stays a gift. The Go implementation (Phase 2) is a separate, independent work derived from a protocol specification — not from GPL source code.
 
 ### 11.7 License Outcome
 
-- The AAA specification is TRUGS LLC intellectual property.
-- The Go implementation is owned by Xepayac/TRUGS LLC.
-- License is chosen by the owner — no GPL obligation.
-- The upstream GPL code was never seen by the implementer.
-- Full disclosure to the upstream project establishes good faith and starts any applicable limitation period.
+**Phase 1 (C++ rewrite):**
+- GPL-3.0, contributed to Session Foundation
+- Derivative work of the upstream codebase
+- Gift — no strings attached
+
+**Phase 2 (Go reimplementation):**
+- The AAA specification is TRUGS LLC intellectual property
+- The Go implementation is owned by TRUGS LLC
+- License chosen by owner — no GPL obligation
+- The upstream GPL code was never seen by the implementer
+- Full disclosure to the upstream project establishes good faith and starts any applicable limitation period
 
 ---
 
