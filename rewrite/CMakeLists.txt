@@ -236,6 +236,18 @@ if(SR_TESTS)
         target_link_libraries(test_quic_shutdown PRIVATE sr_link sr_relay_conn Catch2::Catch2WithMain)
         add_test(NAME quic_shutdown COMMAND test_quic_shutdown)
 
+        add_executable(test_quic_tickers
+            test/test_quic_tickers.cpp
+        )
+        target_link_libraries(test_quic_tickers PRIVATE sr_link sr_relay_conn Catch2::Catch2WithMain)
+        add_test(NAME quic_tickers COMMAND test_quic_tickers)
+
+        add_executable(test_quic_0rtt
+            test/test_quic_0rtt.cpp
+        )
+        target_link_libraries(test_quic_0rtt PRIVATE sr_link sr_relay_conn Catch2::Catch2WithMain)
+        add_test(NAME quic_0rtt COMMAND test_quic_0rtt)
+
         add_executable(test_quic_threading
             test/test_quic_threading.cpp
         )
