@@ -17,15 +17,47 @@ This study documents the complete process by which a proprietary graph-based ana
 
 ---
 
-## 1. Origin and Motivation
+## 1. Motivation
 
-### 1.1 How This Started
+This study exists to demonstrate the capabilities of a specific system: TRUG (Traceable Recursive Universal Graph Specification), a graph-based harness that gives frontier LLMs the structural context they need to operate on large codebases. We are spending our time and tokens on this work because the demonstration requires a real subject — a real codebase, with real complexity, real technical debt, and real consequences for getting it wrong.
+
+We chose session-router because we are invested in it. The principal investigator holds Session tokens. The network's success is directly our success. This is not an adversarial exercise — it is a capability demonstration conducted on a project we want to see succeed.
+
+Current frontier LLMs produce code faster, more consistently, and with fewer transcription errors than manual development. They do not fatigue, they do not lose context across a 50-file codebase, and they generate tests at the same speed they generate implementation. This is not a qualitative claim — it is an observable difference in output volume and consistency at the implementation layer.
+
+Model tier matters. Lower-tier models are prone to misinterpretation — they lose architectural coherence across files, make subtle errors in complex logic, and drift from specifications when unsupervised. Only the current generation of frontier models can operate reliably at this scale. First-tier models from a year ago could not have handled a 37,000-line codebase analysis and rewrite at this level — even with a guiding harness. The context windows were too small, the reasoning too shallow, and the code generation too inconsistent across interdependent files.
+
+Even with a frontier model, the task requires a guiding harness. A 37,000-line codebase exceeds what any LLM can hold in working context. Without a structural specification — a graph that tells the agent what exists, what depends on what, and what constraints apply — the agent produces locally correct code that is architecturally incoherent. The TRUG specification solves this: it is the system's structural truth, compact enough for the agent to reference and precise enough to prevent drift.
+
+### The Trinity: Graph, Testing, Auditing
+
+The methodology relies on three reinforcing practices: graph-directed analysis that makes invisible structure visible, comprehensive testing that verifies behavior at every layer, and systematic auditing that catches what tests miss. The graph is the bridge between human understanding and agent execution. All three must be rigorous for the output to be precise. No single practice is sufficient.
+
+**Graph-directed analysis (TRUG)** provides the structural context. The graph maps what exists, what depends on what, and what constraints govern behavior. Without it, the agent writes code that is locally correct but architecturally incoherent — functions that work in isolation but break the system when composed. The graph prevents drift by giving the agent a single source of structural truth that persists across the entire development cycle.
+
+**Comprehensive testing** provides behavioral verification. The agent generates tests at the same speed it generates implementation — there is no economic reason to skip coverage. Testing proves the code does what it claims. But testing alone cannot prove the code is safe.
+
+**Systematic auditing** provides security and correctness judgment. Tests verify expected behavior. Audits find unexpected behavior — race conditions, lifetime safety violations, implicit invariants that no test exercises. Tests verify what you think of. Audits find what you didn't think of.
+
+These three practices are not independent. The graph directs what to test. The tests reveal what to audit. The audit findings feed back into the graph as new constraints. The cycle — graph → tests → code → audit → graph — is the methodology. Remove any one element and the output degrades: without the graph, the agent drifts. Without tests, bugs ship. Without audits, security vulnerabilities persist in code that passes every test.
+
+### The Human Role
+
+What LLMs cannot do is understand a system. They cannot decide whether to refactor or rewrite. They cannot evaluate whether a threading model is safe or merely appears safe. They cannot judge the security implications of a design decision. Professional software engineers remain essential — not for writing code, but for directing and verifying the agent that writes it. The engineer builds the graph, evaluates the audit findings, and makes the architectural decisions that the agent executes. This is not a reduction in the engineer's role. It is a change in what the role produces: instead of code, the engineer produces understanding — and the code follows from that understanding at machine speed.
+
+The conclusion we draw from this work is direct: any software project that does not adopt frontier-model development practices will be outpaced by one that does. The volume, speed, and consistency of LLM-assisted output — when properly directed through graph, testing, and auditing — is not an incremental improvement over manual development. It is a category change. Legacy development practices produced session-router's current codebase. The same practices will not produce the next generation of it.
+
+---
+
+## 2. Origin
+
+### 2.1 How This Started
 
 The investigation began on a Friday evening (2026-03-28) out of personal curiosity. The principal investigator originally held approximately 0.3% of the total Oxen token supply. When Session Foundation launched Session on top of Oxen, token dilution reduced that stake to approximately 0.1%. This created both financial frustration and a pointed interest in whether the project justifying that dilution was technically sound.
 
 There was no client engagement, no bounty program, no prior relationship with the Session Foundation. The motivation was direct: *I own tokens in this network, my stake was diluted for this project — is the code worth what it cost me?*
 
-### 1.2 Initial Reconnaissance
+### 2.2 Initial Reconnaissance
 
 The first step was orienting to the project's development dynamics. The git history told a clear story:
 
@@ -46,13 +78,13 @@ The first step was orienting to the project's development dynamics. The git hist
 - Thomas Winget: 306 commits (current secondary maintainer)
 - 40+ other contributors with smaller contributions
 
-### 1.3 Decision to Investigate Deeper
+### 2.3 Decision to Investigate Deeper
 
 The combination of factors — large codebase, shrinking contributor base, security-critical application (onion routing), and personal financial interest — justified a deeper investigation. The question shifted from "what does the code look like?" to "is this codebase healthy enough to sustain the network?"
 
 ---
 
-## 2. Analysis Methodology — Three Passes
+## 3. Analysis Methodology — Three Passes
 
 The analysis used TRUG (Traceable Recursive Universal Graph Specification), a graph-based system for mapping software architecture. The method involves constructing a directed graph where nodes represent code entities (modules, functions, types, constraints, decisions) and edges represent relationships (depends-on, calls, owns, constrains, blocks). The graph makes invisible structure visible.
 
@@ -161,9 +193,9 @@ Incremental refactoring was not viable. The decision was made to rewrite.
 
 ---
 
-## 3. Decision to Rewrite
+## 4. Decision to Rewrite
 
-### 3.1 Rationale
+### 4.1 Rationale
 
 The three analysis passes produced a clear conclusion: **the architecture prevents the codebase from being maintained effectively.** Specific factors:
 
@@ -173,7 +205,7 @@ The three analysis passes produced a clear conclusion: **the architecture preven
 4. **Exit mode broken with no test to catch it.** Three separate modules each independently prevent a revenue-generating feature (exit nodes) from functioning.
 5. **The protocol is sound.** The underlying design — libsodium crypto, QUIC transport, 3-hop onion routing — is architecturally superior to Tor for VPN use cases. The problem was implementation, not design.
 
-### 3.2 Scope Decision
+### 4.2 Scope Decision
 
 The rewrite would:
 - Implement the same protocol (LLARP) with the same crypto (libsodium) over the same transport (oxen-libquic)
@@ -185,9 +217,9 @@ The rewrite would:
 
 ---
 
-## 4. Implementation
+## 5. Implementation
 
-### 4.1 Architecture
+### 5.1 Architecture
 
 The rewrite uses a 6-layer architecture where each layer depends only on layers below it:
 
@@ -213,7 +245,7 @@ Layer 5: Node       — TUN device, DNS, config, tick loop. Wires layers togethe
 - Event system with subscribers (vs. forgotten `path_died()` callbacks)
 - ML-KEM-768 uses implicit rejection (vs. timing-oracle throw)
 
-### 4.2 Build Sequence
+### 5.2 Build Sequence
 
 Implementation proceeded bottom-up, one layer at a time. Each layer was fully tested before starting the next:
 
@@ -231,7 +263,7 @@ Implementation proceeded bottom-up, one layer at a time. Each layer was fully te
 | 10 | `ff7f42d` | clang-format with upstream style config |
 | 11 | `523013f` | Code review findings — 4 HIGH, 8 MEDIUM fixes |
 
-### 4.3 Final Metrics
+### 5.3 Final Metrics
 
 | Metric | Upstream | Rewrite |
 |--------|----------|---------|
@@ -247,13 +279,13 @@ Implementation proceeded bottom-up, one layer at a time. Each layer was fully te
 
 ---
 
-## 5. Security Audit
+## 6. Security Audit
 
-### 5.1 Methodology
+### 6.1 Methodology
 
 After implementation, three security audit cycles were conducted. Each cycle reviewed every function in every source file, covering: cryptographic parameter ordering, nonce reuse prevention, key material zeroing, shell injection, thread safety, checksum correctness, and wire format integrity.
 
-### 5.2 Findings and Resolution
+### 6.2 Findings and Resolution
 
 **Cycle 1 — 5 CRITICAL + 5 HIGH findings identified and fixed:**
 
@@ -267,7 +299,7 @@ Re-review of all Cycle 1 fixes confirmed resolution. One new HIGH finding was di
 
 Final state: zero CRITICAL, zero HIGH findings remaining.
 
-### 5.3 Audit Coverage
+### 6.3 Audit Coverage
 
 The audit covered:
 - Every cryptographic operation (AEAD, DH, sealed box, ML-KEM, session key derivation)
@@ -278,9 +310,9 @@ The audit covered:
 
 ---
 
-## 6. Upstream Contributions
+## 7. Upstream Contributions
 
-### 6.1 Three Pull Requests
+### 7.1 Three Pull Requests
 
 Before the rewrite decision was made, three small PRs were submitted to the upstream repository as good-faith contributions:
 
@@ -292,7 +324,7 @@ Before the rewrite decision was made, three small PRs were submitted to the upst
 
 These PRs established contributor presence and demonstrated familiarity with the codebase before proposing larger changes.
 
-### 6.2 Proposal to Session Foundation
+### 7.2 Proposal to Session Foundation
 
 After the rewrite was complete, a formal proposal was submitted (PROPOSAL_session_router_rewrite.md, 160 lines) offering:
 - The rewrite as a GPL-3.0 gift to the project
@@ -302,9 +334,9 @@ After the rewrite was complete, a formal proposal was submitted (PROPOSAL_sessio
 
 ---
 
-## 7. Continued Development
+## 8. Continued Development
 
-### 7.1 Wire Format Integration (Issue #1232)
+### 8.1 Wire Format Integration (Issue #1232)
 
 Following the initial rewrite, a 9-step wire format integration was completed on 2026-03-30:
 
@@ -318,7 +350,7 @@ Following the initial rewrite, a 9-step wire format integration was completed on
 | 8 | `f9f9a4b` | Bootstrap RC parser with IPv6 and network ID |
 | 9 | `85cf594` | Wire compatibility tests |
 
-### 7.2 QUIC Transport Hardening (Issue #1234)
+### 8.2 QUIC Transport Hardening (Issue #1234)
 
 An AAA (Architecture-Audit-Action) plan was developed for QUIC transport production hardening, identifying 7 missing features and 1 critical bug. This plan reached Phase 5 (VALIDATION) and is awaiting human approval before coding begins.
 
@@ -331,7 +363,7 @@ The 7 items:
 6. Key verification on inbound relay connections
 7. Outbound BTStream handler bug (commands only handled inbound)
 
-### 7.3 Security Probe Research (Issue #1253)
+### 8.3 Security Probe Research (Issue #1253)
 
 A comprehensive security research graph was constructed (web.trug.json, 974 lines, 60+ nodes, 100+ edges) mapping:
 - Prior art: Quarkslab audit (2021), Session protocol V2 changes, QUIC vulnerability research
@@ -343,7 +375,7 @@ A comprehensive security research graph was constructed (web.trug.json, 974 line
 
 ---
 
-## 8. Timeline
+## 9. Timeline
 
 All work was completed in 3 calendar days:
 
@@ -357,9 +389,9 @@ All work was completed in 3 calendar days:
 
 ---
 
-## 9. Capabilities Demonstrated
+## 10. Capabilities Demonstrated
 
-### 9.1 Graph-Directed Analysis
+### 10.1 Graph-Directed Analysis
 
 The TRUG analysis system enabled understanding of a 37,000-line codebase in hours rather than weeks. The three-pass methodology — structural flow, dependency cycles, hidden complexity — produced a complete architectural picture that exposed problems invisible to conventional code review:
 
@@ -368,7 +400,7 @@ The TRUG analysis system enabled understanding of a 37,000-line codebase in hour
 - Dead code (entire subsystems returning no-ops) appeared functional from their interfaces
 - The threading model's fragility was hidden behind typedef aliases
 
-### 9.2 AI-Directed Implementation
+### 10.2 AI-Directed Implementation
 
 Claude Code (Anthropic Opus) served as the implementation agent throughout. The human directed analysis, made architectural decisions, chose design tradeoffs, and reviewed all output. Claude wrote code, tests, audit documentation, and proposals. This division of labor — human understanding + AI execution — produced:
 
@@ -377,7 +409,7 @@ Claude Code (Anthropic Opus) served as the implementation agent throughout. The 
 - 1,391-line security audit (function-by-function)
 - Wire-compatible output with zero prior experience in the LLARP protocol
 
-### 9.3 Security Analysis Depth
+### 10.3 Security Analysis Depth
 
 The combination of graph-directed analysis and systematic audit identified issues that had persisted for years in the upstream codebase:
 
@@ -386,7 +418,7 @@ The combination of graph-directed analysis and systematic audit identified issue
 - Exit mode broken across three independent modules with no test to catch it
 - A timing side channel in post-quantum key exchange (ML-KEM throw vs. implicit rejection)
 
-### 9.4 Complete Lifecycle
+### 10.4 Complete Lifecycle
 
 The study demonstrates the full lifecycle from curiosity to contribution:
 
@@ -401,7 +433,7 @@ The study demonstrates the full lifecycle from curiosity to contribution:
 
 ---
 
-## 10. Artifacts
+## 11. Artifacts
 
 | Artifact | Location | Size |
 |----------|----------|------|
@@ -422,13 +454,13 @@ The study demonstrates the full lifecycle from curiosity to contribution:
 
 ---
 
-## 11. QUIC Transport — Implementation
+## 12. QUIC Transport — Implementation
 
-### 11.1 Approach
+### 12.1 Approach
 
 We set out to improve the QUIC transport layer through testing. The approach was test-first: design a comprehensive test suite using the TRUG graph as the specification, write the tests, then build the code to pass them.
 
-### 11.2 Test Suite
+### 12.2 Test Suite
 
 76 test cases across 11 categories, organized by the TRUG graph's node structure:
 
@@ -448,7 +480,7 @@ We set out to improve the QUIC transport layer through testing. The approach was
 
 All 76 tests pass. 19 test suites total (including the 9 pre-existing suites for Layers 0-3).
 
-### 11.3 Code Delivered
+### 12.3 Code Delivered
 
 The test-first approach drove the implementation of production architecture:
 
@@ -463,7 +495,7 @@ The test-first approach drove the implementation of production architecture:
 | **Per-ALPN timeouts** | Relay: 10s keep-alive, 33s idle. Client: 20s keep-alive, 63s idle |
 | **Ordered shutdown** | relay_conns → pending → client → inbound → dead → endpoint → loop |
 
-### 11.4 Security Audit
+### 12.4 Security Audit
 
 Phase 8 reviewed all changes for security implications. 8 findings, 4 fixed:
 
@@ -482,15 +514,15 @@ The HIGH finding (S2) would have caused all bidirectional connections to select 
 
 ---
 
-## 12. QUIC Transport Audit
+## 13. QUIC Transport Audit
 
-### 12.1 Context
+### 13.1 Context
 
 We were auditing the upstream QUIC implementation to improve the code through testing. The QUIC transport layer (`src/link/`, 3,014 lines across 6 files) is the newest and most actively developed part of the codebase — the QUIC migration from the custom IWP wire protocol began in July 2023 and is ongoing. We assumed this would be the cleanest code in the project. We were wrong.
 
 Our approach was methodical. First, we built a TRUG graph of the QUIC layer (quic_layer.trug.json — 37 nodes, 38 edges) mapping every state machine, connection map, lifecycle transition, and threading interaction. Then we designed a comprehensive test suite (106 tests across 11 categories). Then we audited the test suite twice against the TRUG graph — once for coverage gaps, once for insidious structural problems. This is what we found.
 
-### 13.2 Architecture (What Exists)
+### 14.2 Architecture (What Exists)
 
 The QUIC layer is well-designed on paper. It has:
 
@@ -499,7 +531,7 @@ The QUIC layer is well-designed on paper. It has:
 - **Three ALPN types** with per-type timeouts, key requirements, and command sets. Relay connections (10s keep-alive, 33s idle, key required, 8 commands). Client connections (20s keep-alive, 63s idle, key optional, 2 commands). Bootstrap connections (no keep-alive, 10s idle, 1 command, untracked). This is correct.
 - **Two lifecycle tickers.** Redundancy ticker (every 20s) closes bidirectional losers. Deregistration ticker (every 1 minute) tracks relays that leave the network and closes their connections after 30 minutes. Both are correct.
 
-### 13.3 Threading Model (Where It Gets Dangerous)
+### 14.3 Threading Model (Where It Gets Dangerous)
 
 The QUIC layer operates across two event loops:
 
@@ -532,7 +564,7 @@ The datagram handler does not use this pattern. It captures `this` directly:
 
 If the Endpoint is destroyed while a datagram is queued in the network loop, the outer lambda fires with a dangling `this`. The inner lambda is then queued in the router loop with the same dangling pointer. This is a use-after-free vulnerability in the transport layer of an onion routing protocol.
 
-### 13.4 Race Conditions
+### 14.4 Race Conditions
 
 **Finding W3: Cross-loop control stream creation.**
 
@@ -546,7 +578,7 @@ Outbound connections create their control stream BEFORE establishment (in `ctrl_
 
 This means the system is correct but fragile — any change to the stream registration order or callback timing could break one path without affecting the other, and no test exists to catch it.
 
-### 13.5 Structural Anomalies
+### 14.5 Structural Anomalies
 
 **Finding W2: Non-exclusive connection close matching.**
 
@@ -560,7 +592,7 @@ The `path_build` command handler captures the `remote` identity by value at regi
 
 `close_redundant()` iterates `relay_bidir` and calls `Connection::close()` on the loser direction. The close triggers an `on_conn_closed` callback that — after transfer to the router loop — could modify `relay_conns` or `relay_bidir`. This is safe only because the callback transfer is asynchronous (`call()`, not `call_get()`), so the modification queues after the iteration completes. But this safety depends on the `call()` vs `call_get()` distinction, which is never documented or tested.
 
-### 12.6 Upstream Bug: Request Leak in find_cc
+### 13.6 Upstream Bug: Request Leak in find_cc
 
 **Finding W8.** The `find_cc` handler has a legacy code path (for clients running versions before 1.0.2) that fans out a lookup request to all closest relays and returns the first success. The response counting logic has a bug:
 
@@ -573,7 +605,7 @@ When all forwarded requests fail and the counter reaches zero, the function retu
 
 This is a confirmed bug in the upstream codebase. The comment says "there are more responses to come back," but the counter has reached zero — there are no more responses. The correct behavior is to call `respond(error)` when the last response fails.
 
-### 12.7 Test Suite Produced
+### 13.7 Test Suite Produced
 
 The audit produced a test plan of 106 tests across 11 categories:
 
@@ -594,7 +626,7 @@ The audit produced a test plan of 106 tests across 11 categories:
 
 Every test traces to a node or edge in the TRUG graph. The test plan, the TRUG graph, and the audit findings are available in the repository.
 
-### 12.8 Summary
+### 13.8 Summary
 
 The QUIC transport layer's correctness depends on undocumented invariants (W1: inline call_get), implicit threading contracts (W3: cross-loop access safe only during pre-establishment), and asymmetric design decisions (W4, W5) that no test infrastructure exists to verify.
 
@@ -602,9 +634,9 @@ The datagram handler has a use-after-free (W6). The protocol logic has a request
 
 ---
 
-## 13. Assessment: State of the Upstream Project
+## 14. Assessment: State of the Upstream Project
 
-### 13.1 The Code
+### 14.1 The Code
 
 Session-router is a security-critical application — an onion router handling adversarial network traffic. The codebase has:
 
@@ -617,19 +649,19 @@ Session-router is a security-critical application — an onion router handling a
 
 This is not a codebase that can be incrementally improved. The architecture prevents it.
 
-### 13.2 The Team
+### 14.2 The Team
 
 The project had 40+ contributors over 8 years. It now has 2 active maintainers working on a 37,000-line codebase. The QUIC transport migration — replacing the custom wire protocol with oxen-libquic — began in July 2023 and is still not complete nearly 3 years later. The dependency (oxen-libquic) has required multiple emergency version bumps for crashes, 0-RTT bugs, and congestion control issues.
 
 Two developers maintaining 37,000 lines of circular, untested, unfuzzed cryptographic networking code is not sustainable.
 
-### 13.3 The Technology Landscape
+### 14.3 The Technology Landscape
 
 It is 2026. AI-assisted development is not experimental — it is the standard for any team that wants to remain competitive. A single person with a graph-based analysis system and an AI agent produced a complete, audited, wire-compatible rewrite in one overnight session. That rewrite has more test coverage, fewer architectural problems, and a cleaner security posture than the original.
 
 The upstream project has not adopted AI-assisted development, automated security auditing, or any of the tooling that makes modern software development tractable at this scale. The result is predictable: a shrinking team falling further behind on a growing codebase with accumulating technical debt and no systematic way to address it.
 
-### 13.4 The Offer
+### 14.4 The Offer
 
 The C++ rewrite is GPL-3.0 and freely available. It is a complete, working, audited replacement for the core protocol layers. It comes with:
 
@@ -643,7 +675,7 @@ The C++ rewrite is GPL-3.0 and freely available. It is a complete, working, audi
 
 This is what graph-directed analysis produces. The question for the Session Foundation is whether they want to use it.
 
-### 13.5 The Alternative
+### 14.5 The Alternative
 
 If the upstream project continues on its current trajectory — two maintainers, no AI tooling, no fuzz testing, accumulating tech debt, broken features, acknowledged security vulnerabilities in TODO comments — the LLARP protocol will be reimplemented in Go under Apache 2.0 by a team that has already demonstrated the ability to understand and rebuild the system from scratch.
 
@@ -653,7 +685,7 @@ This is not a threat. It is a description of what is already planned, fully docu
 
 ---
 
-## 14. Conclusion
+## 15. Conclusion
 
 A graph-based analysis system transformed a Friday evening's frustration into a complete, audited, wire-compatible rewrite of a security-critical network protocol in 3 days. The key enabler was not the AI agent (which wrote the code) but the analysis methodology (which directed what to write). The three-pass approach — structural flow, dependency cycles, hidden complexity — produced understanding that would have required weeks of manual code review. That understanding made the rewrite both possible and correct.
 
