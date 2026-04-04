@@ -668,19 +668,15 @@ The audit produced a test plan of 106 tests across 11 categories:
 
 Every test traces to a node or edge in the TRUG graph. The test plan, the TRUG graph, and the audit findings are available in the repository.
 
-### 12.8 What This Demonstrates
+### 12.8 Summary
 
-We set out to help. We wanted to write tests for untested code and contribute them upstream. The TRUG analysis was supposed to be the efficient way to understand what to test.
+The QUIC transport layer's correctness depends on undocumented invariants (W1: inline call_get), implicit threading contracts (W3: cross-loop access safe only during pre-establishment), and asymmetric design decisions (W4, W5) that no test infrastructure exists to verify.
 
-Instead, the analysis revealed that the code's correctness depends on undocumented invariants (W1: inline call_get), implicit threading contracts (W3: cross-loop access safe only during pre-establishment), and asymmetric design decisions (W4, W5) that no test can verify because no test infrastructure exists. We also found a use-after-free in the datagram handler (W6) and a request leak in the protocol logic (W8).
-
-These are not the findings of a hostile audit. These are the findings of someone trying to write tests for code that has never been tested. The fact that testing the code reveals bugs is not surprising. The fact that the code cannot be tested without first understanding an undocumented JobQueue behavioral contract (W1) is the real finding — it means no one outside the original developers can safely contribute to this code.
+The datagram handler has a use-after-free (W6). The protocol logic has a request leak (W8). Writing tests for this code requires first reverse-engineering an undocumented JobQueue behavioral contract (W1) that is not specified in any header, comment, or documentation in the repository.
 
 ---
 
 ## 13. Assessment: State of the Upstream Project
-
-This section is written plainly.
 
 ### 13.1 The Code
 
