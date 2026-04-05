@@ -1,0 +1,123 @@
+{
+  "name": "session-router",
+  "version": "1.0.0",
+  "type": "REPOSITORY",
+  "description": "Session Network onion router (fork of Lokinet) — QUIC transport layer. C++ codebase with TRUG-directed analysis and test suite.",
+  "dimensions": {
+    "networking": {
+      "description": "C++ networking project: source, tests, build system, documentation",
+      "base_level": "BASE"
+    }
+  },
+  "capabilities": {
+    "extensions": [],
+    "vocabularies": ["code_v1"],
+    "profiles": []
+  },
+  "meta": {
+    "generated_by": "manual",
+    "last_synced": "2026-04-05",
+    "owner": "Xepayac",
+    "license": "GPL-3.0",
+    "repository": "https://github.com/Xepayac/session-router"
+  },
+  "nodes": [
+    {
+      "id": "repo_root",
+      "type": "REPOSITORY",
+      "properties": {
+        "name": "session-router",
+        "description": "Onion routing with QUIC transport. C++ rewrite in progress, Go clean room planned."
+      },
+      "parent_id": null,
+      "contains": ["comp_src", "comp_include", "comp_test", "comp_rewrite", "comp_docs", "comp_quic_trug", "comp_web_trug"],
+      "metric_level": "KILO_REPOSITORY",
+      "dimension": "networking"
+    },
+    {
+      "id": "comp_src",
+      "type": "MODULE",
+      "properties": {
+        "name": "src/",
+        "description": "C++ source code — router implementation"
+      },
+      "parent_id": "repo_root",
+      "contains": [],
+      "metric_level": "BASE_MODULE",
+      "dimension": "networking"
+    },
+    {
+      "id": "comp_include",
+      "type": "MODULE",
+      "properties": {
+        "name": "include/",
+        "description": "C++ headers"
+      },
+      "parent_id": "repo_root",
+      "contains": [],
+      "metric_level": "BASE_MODULE",
+      "dimension": "networking"
+    },
+    {
+      "id": "comp_test",
+      "type": "MODULE",
+      "properties": {
+        "name": "test/",
+        "description": "Test suite — QUIC layer tests, integration tests"
+      },
+      "parent_id": "repo_root",
+      "contains": [],
+      "metric_level": "BASE_MODULE",
+      "dimension": "networking"
+    },
+    {
+      "id": "comp_rewrite",
+      "type": "MODULE",
+      "properties": {
+        "name": "rewrite/",
+        "description": "C++ rewrite — TRUG-directed modernization"
+      },
+      "parent_id": "repo_root",
+      "contains": [],
+      "metric_level": "BASE_MODULE",
+      "dimension": "networking"
+    },
+    {
+      "id": "comp_docs",
+      "type": "MODULE",
+      "properties": {
+        "name": "docs/",
+        "description": "Documentation"
+      },
+      "parent_id": "repo_root",
+      "contains": [],
+      "metric_level": "BASE_MODULE",
+      "dimension": "networking"
+    },
+    {
+      "id": "comp_quic_trug",
+      "type": "FILE",
+      "properties": {
+        "name": "quic_layer.trug.json",
+        "description": "TRUG graph of QUIC transport layer — structural analysis"
+      },
+      "parent_id": "repo_root",
+      "contains": [],
+      "metric_level": "BASE_FILE",
+      "dimension": "networking"
+    },
+    {
+      "id": "comp_web_trug",
+      "type": "FILE",
+      "properties": {
+        "name": "web.trug.json",
+        "description": "Web research TRUG — security research as traceable graph"
+      },
+      "parent_id": "repo_root",
+      "contains": [],
+      "metric_level": "BASE_FILE",
+      "dimension": "networking"
+    }
+  ],
+  "edges": []
+}
