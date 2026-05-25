@@ -1042,7 +1042,7 @@ namespace srouter::link
                 fallback_init = btdc.require_span<std::byte>("i");
                 btdc.finish();
             }
-            else if (payload.front() != std::byte{'l'})
+            else if (payload.front() == std::byte{'l'})
             {
                 oxenc::bt_list_consumer btlc{payload};
                 path_switch = btlc.consume_span<std::byte>();
