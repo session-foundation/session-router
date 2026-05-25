@@ -108,7 +108,7 @@ namespace srouter::session
                         reset();
                 }};
 
-            auto stream_opened = [this](quic::Stream& stream) {
+            auto stream_opened = [this](quic::Stream&) {
 #if 0
                 stream.set_stream_data_cb([this, prev_byte = std::optional<std::byte>{std::nullopt}](
                                               quic::Stream& stream, std::span<const std::byte> data) mutable {
@@ -1828,10 +1828,6 @@ namespace srouter::session
                 "Received session accept message for established session, likely a path switch failed because the "
                 "remote restarted, but it accepted our fallback session init.");
 
-        // reset these so that if this parsing fails we trigger a new session init:
-        _is_established = false;
-        _outbound_tag = 0;
-
         try
         {
             auto box = payload.require_span<std::byte>("B");
@@ -1911,10 +1907,6 @@ namespace srouter::session
                 "Received session accept message for established session, likely a path switch failed because the "
                 "remote restarted, so it accepted our backup session init.");
         }
-
-        // reset these so that if this parsing fails we trigger a new session init:
-        _is_established = false;
-        _outbound_tag = 0;
 
         oxenc::bt_dict_consumer btdc{params};
         auto tag = btdc.require<session_tag>("t"sv);

@@ -413,7 +413,7 @@ namespace srouter::rpc
         _router._jq->call([&]() {
             try
             {
-                if (auto session = _router.session_endpoint().get_session(netaddr))
+                if (_router.session_endpoint().get_session(netaddr))
                 {
                     auto hook = [replier = sessionclose.move()](quic::message m) mutable {
                         nlohmann::json result;

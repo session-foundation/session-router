@@ -550,7 +550,7 @@ namespace srouter::handlers
                 resolve_sns(
                     name,
                     [this, ip_range](
-                        std::optional<NetworkAddress> maybe_addr, bool assertive, std::chrono::milliseconds /*ttl*/) {
+                        std::optional<NetworkAddress> maybe_addr, bool, std::chrono::milliseconds /*ttl*/) {
                         if (maybe_addr)
                         {
                             log::critical(
@@ -578,7 +578,7 @@ namespace srouter::handlers
                 resolve_sns(
                     name,
                     [this, auth_token](
-                        std::optional<NetworkAddress> maybe_addr, bool assertive, std::chrono::milliseconds /*ttl*/) {
+                        std::optional<NetworkAddress> maybe_addr, bool, std::chrono::milliseconds /*ttl*/) {
                         if (maybe_addr)
                         {
                             log::debug(
@@ -595,7 +595,7 @@ namespace srouter::handlers
 
     void SessionEndpoint::resolve_sns(
         std::string sns,
-        std::function<void(std::optional<NetworkAddress>, bool assertive, std::chrono::milliseconds ttl)> func)
+        std::function<void(std::optional<NetworkAddress>, bool, std::chrono::milliseconds ttl)> func)
     {
         Lock_t l{paths_mutex};
         if (not is_valid_sns(sns))
