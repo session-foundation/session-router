@@ -41,15 +41,15 @@ namespace srouter::vpn
         void disarm() { f = nullptr; }
     };
 
-    // Send a netlink request and wait for the response.  Returns an error string on error, nullopt
-    // on success.  Must have set NLM_F_ACK on the request header flags!
+    // Send a netlink request and wait for the response.  Returns an {errno, error string} on error,
+    // nullopt on success.  Must have set NLM_F_ACK on the request header flags!
     template <typename NLRequestT>
-    std::optional<std::string> nl_submit(int nlfd, const NLRequestT& req)
+    std::optional<std::pair<int, std::string>> nl_submit(int nlfd, const NLRequestT& req)
     {
         assert(req.header.nlmsg_flags & NLM_F_REQUEST);
         log::trace(logcat, "submitting netlink request to fd {}", nlfd);
         if (-1 == send(nlfd, &req, req.header.nlmsg_len, 0))
-            return strerror(errno);
+            return std::pair<int, std::string>{errno, strerror(errno)};
 
         char resp_buf[4096];
         log::trace(logcat, "waiting for netlink response");
@@ -57,9 +57,9 @@ namespace srouter::vpn
         log::trace(logcat, "got netlink response");
         auto* resp = reinterpret_cast<nlmsghdr*>(resp_buf);
         if (!NLMSG_OK(resp, resp_len) || resp->nlmsg_type != NLMSG_ERROR)
-            return "Invalid netlink response"s;
+            return std::pair<int, std::string>{EIO, "Invalid netlink response"s};
         if (auto* nlerr = reinterpret_cast<nlmsgerr*>(NLMSG_DATA(resp_buf)); nlerr->error < 0)
-            return strerror(-nlerr->error);
+            return std::pair<int, std::string>{-nlerr->error, strerror(-nlerr->error)};
         return std::nullopt;
     }
 
@@ -193,8 +193,16 @@ namespace srouter::vpn
                 }
 
                 if (auto err = nl_submit(nlfd, request))
+                {
+                    if (n6 && err->first == EACCES)
+                        log::critical(
+                            logcat,
+                            "IPv6 support appears to be disabled or restricted on this system, "
+                            "but private IPv6 addressing is required for Session Router");
+
                     throw std::runtime_error{
-                        "Failed to add address {} to {}: {}"_format(addr_strings.back(), _info.ifname, *err)};
+                        "Failed to add address {} to {}: {}"_format(addr_strings.back(), _info.ifname, err->second)};
+                }
 
                 // Adding a conflicting address does not fail, and so we need to go query all the
                 // addresses on the system to see if the same address exists on any *other*
