@@ -69,6 +69,12 @@ namespace session::router
         /// reached at all until it rejoins.  Attempting it again immediately is pointless, but the
         /// verdict is not permanent: it is re-checked on each attempt.
         unreachable,
+
+        /// The remote advertises that it cannot accept tunnelled TCP connections, which only a
+        /// client running a full tun interface can do.  (TCP only.)  The session itself is fine; it
+        /// is TCP that will never work with this remote, so retrying is pointless until the remote
+        /// itself changes.
+        no_tcp,
     };
 
     class SessionRouter;
@@ -113,18 +119,58 @@ namespace session::router
         const tunnel_info* operator->() const { return &_info; }
     };
 
+    /// A claim on a Session Router TCP tunnel, obtained from SessionRouter::establish_tcp().
+    ///
+    /// This behaves exactly as udp_tunnel does, and the notes there about sharing, releasing, and
+    /// outliving the SessionRouter apply here too: the mapping stays up until the last claim on it
+    /// is destroyed.
+    ///
+    /// Releasing the last claim closes the local listening port *and* the TCP connections already
+    /// established through it: holding a claim is what keeps the tunnel alive, so nothing outlives
+    /// the last one.  Keep the claim for as long as you want the connections.
+    class tcp_tunnel
+    {
+        friend class SessionRouter;
+
+        std::weak_ptr<void> _router_alive;
+        SessionRouter* _router{nullptr};
+        tunnel_info _info;
+
+        tcp_tunnel(SessionRouter& router, std::weak_ptr<void> alive, tunnel_info info);
+
+      public:
+        tcp_tunnel() = default;
+        tcp_tunnel(tcp_tunnel&& other) noexcept { *this = std::move(other); }
+        tcp_tunnel& operator=(tcp_tunnel&& other) noexcept;
+        tcp_tunnel(const tcp_tunnel&) = delete;
+        tcp_tunnel& operator=(const tcp_tunnel&) = delete;
+        ~tcp_tunnel();
+
+        /// Releases this claim now rather than at destruction, leaving the object empty.
+        void reset();
+
+        explicit operator bool() const { return _router != nullptr; }
+
+        const tunnel_info& operator*() const { return _info; }
+        const tunnel_info* operator->() const { return &_info; }
+    };
+
     using snode_path = std::vector<std::pair<std::string, std::string>>;
     using session_path = std::pair<snode_path, std::string>;
 
     class SessionRouter
     {
         friend class udp_tunnel;
+        friend class tcp_tunnel;
 
-        // Lets a udp_tunnel that outlives us know not to touch us on the way out.
+        // Lets a udp_tunnel/tcp_tunnel that outlives us know not to touch us on the way out.
         std::shared_ptr<void> _alive{std::make_shared<char>()};
 
         // Releases one claim on a UDP tunnel; the mapping goes away with the last one.
         void release_udp(const std::string& remote, uint16_t port);
+
+        // Releases one claim on a TCP tunnel; the mapping goes away with the last one.
+        void release_tcp(const std::string& remote, uint16_t port);
 
         std::unique_ptr<srouter::Context> context;
 
@@ -235,6 +281,38 @@ namespace session::router
         // Take care not to use very slow or blocking code inside the callbacks: they are called
         // from Session Router's logic thread (and so any blocking will stall Session Router).
         udp_tunnel establish_udp(
+            std::string_view remote,
+            uint16_t port,
+            std::function<void(tunnel_info)> on_established = nullptr,
+            std::function<void(tunnel_failure)> on_failed = nullptr);
+
+        // The TCP counterpart of establish_udp: establishes a session to the given remote and maps
+        // an IPv6 localhost port that the application connects to with ordinary TCP.  Each
+        // connection made to that port becomes a separate connection to `port` on the remote, so a
+        // single mapping carries as many concurrent connections as the application opens.
+        //
+        // (As with establish_udp, this does not accept SNS names: call resolve() first.)
+        //
+        // The outcomes are the same three as establish_udp, with two differences:
+        //
+        // - It also returns an empty claim (mapping nothing, no callback) if the remote's client
+        //   contact says it does not accept tunnelled TCP connections.  Only clients running a full
+        //   tun interface can terminate them, so an embedded client cannot be a destination.
+        //
+        // - `on_failed(no_tcp)` is invoked if that only becomes apparent later, i.e. we had no
+        //   client contact for the remote when the port was mapped and it turned out, once we did,
+        //   not to accept them.  As with `unreachable`, the mapping exists and the claim is real.
+        //
+        // Unlike UDP, nothing can be sent before the session is established: a TCP connection made
+        // to the mapped port before then is held until the session comes up, and dropped if it does
+        // not.
+        //
+        // `tunnel_info::suggested_mtu` is always nullopt for TCP: segment sizes are not the
+        // application's to choose.
+        //
+        // Take care not to use very slow or blocking code inside the callbacks: they are called from
+        // Session Router's logic thread (and so any blocking will stall Session Router).
+        tcp_tunnel establish_tcp(
             std::string_view remote,
             uint16_t port,
             std::function<void(tunnel_info)> on_established = nullptr,

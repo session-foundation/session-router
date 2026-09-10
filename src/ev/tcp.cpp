@@ -1,6 +1,6 @@
 #include "tcp.hpp"
 
-#include "net/ip_packet.hpp"
+#include "util/formattable.hpp"
 #include "util/logging.hpp"
 #include "util/logging/buffer.hpp"
 
@@ -12,7 +12,16 @@ namespace srouter
 {
     static_assert(std::same_as<evutil_socket_t, TCPConnection::fd_t>);
 
-    static auto logcat = oxen::log::Cat("ev-tcp");
+    static auto logcat = oxen::log::Cat("tcp");
+
+    // Backpressure thresholds.  The stream pair stops us reading from the application when the
+    // tunnel is not keeping up; the socket pair pauses the stream when the application is not
+    // keeping up.  Both need enough hysteresis to avoid flapping on a high-latency path, where a
+    // full bandwidth-delay product of data can legitimately be in flight.
+    inline constexpr size_t STREAM_ALARM_WATER = size_t{512} * 1024;
+    inline constexpr size_t STREAM_CLEAR_WATER = size_t{64} * 1024;
+    inline constexpr size_t SOCKET_ALARM_WATER = size_t{512} * 1024;
+    inline constexpr size_t SOCKET_CLEAR_WATER = size_t{64} * 1024;
 
     constexpr auto evconnlistener_deleter = [](::evconnlistener *e) {
         log::trace(logcat, "Invoking evconnlistener deleter!");
@@ -35,18 +44,17 @@ namespace srouter
 
     static void tcp_read_cb(bufferevent *bev, void *user_arg)
     {
-        std::vector<uint8_t> buf{};
-        buf.resize(2048);
-
-        // Load data from input buffer to local buffer
-        // FIXME: handle nwrite == 0
-        auto nwrite = bufferevent_read(bev, buf.data(), buf.size());
-        buf.resize(nwrite);
-
-        log::trace(logcat, "TCP socket received {}B: {}", nwrite, buffer_printer{buf});
-
         auto *conn = reinterpret_cast<TCPConnection *>(user_arg);
         assert(conn);
+
+        std::vector<uint8_t> buf{};
+        buf.resize(evbuffer_get_length(bufferevent_get_input(bev)));
+        if (buf.empty())
+            return;
+
+        buf.resize(bufferevent_read(bev, buf.data(), buf.size()));
+
+        log::trace(logcat, "TCP socket received {}B: {}", buf.size(), buffer_printer{buf});
 
         conn->stream->send(std::move(buf));
     };
@@ -60,7 +68,12 @@ namespace srouter
     void TCPConnection::on_write_available()
     {
         log::debug(logcat, "TCP Tunnel connection, write to local conn was blocked but is now available.");
-        stream->resume();
+        if (stream->is_paused())
+            stream->resume();
+
+        // A half-close we could not act on earlier because data was still queued for the app.
+        if (_fin_received)
+            flush_and_shutdown_write();
     }
 
     static void tcp_event_cb(bufferevent *bev, short what, void *user_arg)
@@ -81,22 +94,30 @@ namespace srouter
                 : what & BEV_EVENT_CONNECTED ? "CONNECTED"
                                              : "IMPOSSIBLE");
 
-        // this is where the InboundSession confirms it established a TCP connection to the backend app
+        // This is where the accepting side confirms it established a TCP connection to the backend
+        // app; the stream is held paused until then so that no data is lost before the socket exists.
         if (what & BEV_EVENT_CONNECTED)
         {
-            log::info(logcat, "TCP connect operation finished!");
+            log::debug(logcat, "TCP connect operation finished!");
+            conn->_connected = true;
             conn->stream->resume();
+            return;
         }
+
+        // An error before the socket ever came up means we could not reach the target at all, which
+        // the far end needs to be able to tell apart from a connection that broke mid-stream.
         if (what & BEV_EVENT_ERROR)
         {
-            log::critical(logcat, "TCP Connection encountered error from bufferevent");
+            log::warning(
+                logcat,
+                "TCP Connection encountered error from bufferevent: {}",
+                evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
+            conn->close(conn->_connected ? tunnel_error::TCP_FAILURE : tunnel_error::CONNECT_FAILED);
+            return;
         }
-        if (what & (BEV_EVENT_EOF | BEV_EVENT_ERROR))
-        {
-            log::debug(logcat, "TCP Connection closing tunneled QUIC stream");
 
-            conn->stream->close();
-        }
+        if (what & BEV_EVENT_EOF)
+            conn->on_tcp_eof();
     };
 
     static void tcp_listen_cb(
@@ -113,6 +134,12 @@ namespace srouter
 
         // make TCPConnection here!
         auto *conn = handle->_conn_maker(bevent, fd);
+        if (!conn)
+        {
+            log::warning(logcat, "Could not tunnel incoming TCP connection from {}; dropping it", source);
+            bufferevent_free(bevent);
+            return;
+        }
 
         bufferevent_setcb(bevent, tcp_read_cb, tcp_write_cb, tcp_event_cb, conn);
         bufferevent_enable(bevent, EV_READ | EV_WRITE);
@@ -133,58 +160,92 @@ namespace srouter
     TCPConnection::TCPConnection(bufferevent *_bev, evutil_socket_t _fd, std::shared_ptr<quic::Stream> s)
         : bev{_bev}, fd{_fd}, stream{std::move(s)}
     {
-        stream->set_data_callback([this, _bev](quic::Stream &stream, std::span<const std::byte> data) mutable {
-            // libquic FIXME: would be convenient to be able to ask the stream if it's inbound or outbound
-            // here since this callback is used for both and that would make logging more clear.
-            if (stream.is_paused())
+        stream->set_data_callback([this](quic::Stream &s, std::span<const std::byte> data) {
+            if (bufferevent_write(bev, data.data(), data.size()) != 0)
             {
-                // FIXME: C++23 makes this syntax nicer
-                pending_buffer.insert(pending_buffer.end(), data.begin(), data.end());
-                return;
-            }
-            std::byte *cur = pending_buffer.data();
-            size_t written = 0;
-            while (written < pending_buffer.size())
-            {
-                constexpr size_t chunk_size = 1500;  // FIXME: this, obviously; arbitrary number
-                size_t s = std::min(chunk_size, pending_buffer.size() - written);
-                if (bufferevent_write(_bev, cur, s) != 0)
-                {
-                    // FIXME: if hypothetically quic/Session Router stream is finished sending,
-                    // so this is the last call of this callback, but socket is blocked, not
-                    // letting us write the last chunk(s) buffered, what to do?
-                    break;
-                }
-                written += s;
-                cur += s;
-            }
-            if (written < pending_buffer.size())
-            {
-                log::debug(logcat, "TCP Tunnel stream unpaused, but we failed to write all queued data.");
-                size_t new_size = pending_buffer.size() - written;
-                std::memmove(pending_buffer.data(), pending_buffer.data() + written, new_size);
-                pending_buffer.resize(new_size);
-                pending_buffer.insert(pending_buffer.end(), data.begin(), data.end());
-            }
-            if (written == pending_buffer.size())
-                pending_buffer.clear();
-            else
-            {  // we got unpaused, but clogged the (kernel?) buffer again, pause again
-                stream.pause();
-                pending_buffer.insert(pending_buffer.end(), data.begin(), data.end());
+                log::warning(
+                    logcat, "Failed to write {}B from stream (id:{}) to TCP socket", data.size(), s.stream_id());
+                close(tunnel_error::TCP_FAILURE);
                 return;
             }
 
-            if (auto rv = bufferevent_write(_bev, data.data(), data.size()); rv != 0)
-            {
-                log::debug(logcat, "TCP Tunnel refused write, pausing quic stream and buffering.");
-                pending_buffer.resize(data.size());
-                std::memcpy(pending_buffer.data(), data.data(), data.size());
-                return;
-            }
+            log::trace(logcat, "Stream (id:{}) wrote {}B to TCP buffer", s.stream_id(), data.size());
 
-            log::debug(logcat, "Stream (id:{}) wrote {}B to TCP buffer", stream.stream_id(), data.size());
+            // A bufferevent's output buffer grows without limit, so the only backpressure available
+            // here is to stop the far end once the application is visibly failing to keep up.
+            if (!s.is_paused() && evbuffer_get_length(bufferevent_get_output(bev)) >= SOCKET_ALARM_WATER)
+            {
+                log::debug(logcat, "App is behind on stream (id:{}); pausing the tunnelled stream", s.stream_id());
+                s.pause();
+            }
         });
+
+        stream->set_fin_callback([this](quic::Stream &) { on_stream_fin(); });
+
+        stream->set_close_callback([this](quic::Stream &s, uint64_t ec) {
+            if (ec != 0)
+                log::debug(logcat, "Tunnelled stream (id:{}) closed by remote with error code {}", s.stream_id(), ec);
+            finish();
+        });
+
+        stream->enable_watermarks(
+            STREAM_ALARM_WATER,
+            [this](quic::Stream &) { stop_reading(); },
+            STREAM_CLEAR_WATER,
+            [this](quic::Stream &) { resume_reading(); });
+
+        // Fire the write callback once the app has drained down to here, which is what lets us
+        // un-pause the stream and act on a deferred half-close.
+        bufferevent_setwatermark(bev, EV_WRITE, SOCKET_CLEAR_WATER, 0);
+    }
+
+    void TCPConnection::on_tcp_eof()
+    {
+        if (_fin_sent)
+            return;
+        _fin_sent = true;
+
+        log::debug(logcat, "Local TCP side closed; passing the half-close on to the tunnelled stream");
+        bufferevent_disable(bev, EV_READ);
+        stream->send_fin();
+
+        if (_write_shutdown)
+            finish();
+    }
+
+    void TCPConnection::on_stream_fin()
+    {
+        log::debug(logcat, "Tunnelled stream finished sending; shutting down our TCP write side");
+        _fin_received = true;
+        flush_and_shutdown_write();
+    }
+
+    void TCPConnection::flush_and_shutdown_write()
+    {
+        if (_write_shutdown)
+            return;
+
+        // Shutting down while data is still queued for the app would truncate it; the write
+        // watermark callback brings us back here once it drains.
+        if (evbuffer_get_length(bufferevent_get_output(bev)) > 0)
+            return;
+
+        _write_shutdown = true;
+        if (fd != -1)
+            ::shutdown(fd, SHUT_WR);
+
+        if (_fin_sent)
+            finish();
+    }
+
+    void TCPConnection::finish()
+    {
+        if (_finished)
+            return;
+        _finished = true;
+
+        if (on_done)
+            on_done();
     }
 
     void TCPConnection::stop_reading() { bufferevent_disable(bev, EV_READ); }
@@ -193,13 +254,35 @@ namespace srouter
 
     TCPConnection::~TCPConnection()
     {
+        // The stream can outlive us (the connection also holds it), so make sure nothing it does
+        // afterwards calls back into this object.  These have to be cleared before the close below,
+        // which can fire them re-entrantly.
+        if (stream)
+        {
+            stream->set_data_callback(nullptr);
+            stream->set_fin_callback(nullptr);
+            stream->set_close_callback(nullptr);
+            stream->disable_watermarks();
+
+            // Being dropped without having finished (an owner tearing the tunnel down, or a connect
+            // that failed outright) still has to take the stream down rather than leaving it open
+            // on the wire.
+            if (!_finished)
+                stream->close(_connected ? tunnel_error::TCP_FAILURE : tunnel_error::CONNECT_FAILED);
+        }
+
         bufferevent_free(bev);
         log::debug(logcat, "TCPSocket shut down!");
     }
 
     void TCPConnection::close(uint64_t ec)
     {
-        log::info(logcat, "TCP connection closing with application error code: {}", ec);
+        if (_finished)
+            return;
+
+        log::debug(logcat, "TCP connection closing with application error code: {}", ec);
+        stream->close(ec);
+        finish();
     }
 
     std::shared_ptr<TCPHandle> TCPHandle::make_server(quic::Loop &ev, tcpconn_hook cb, uint16_t port)
@@ -207,14 +290,6 @@ namespace srouter
         std::shared_ptr<TCPHandle> h{new TCPHandle(ev, std::move(cb), port)};
         return h;
     }
-
-    std::shared_ptr<TCPHandle> TCPHandle::make_client(quic::Loop &ev, quic::Address connect)
-    {
-        std::shared_ptr<TCPHandle> h{new TCPHandle{ev, std::move(connect)}};
-        return h;
-    }
-
-    TCPHandle::TCPHandle(quic::Loop &ev_loop, quic::Address connect) : _ev{ev_loop}, _connect{std::move(connect)} {}
 
     TCPHandle::TCPHandle(quic::Loop &ev_loop, tcpconn_hook cb, uint16_t p) : _ev{ev_loop}, _conn_maker{std::move(cb)}
     {
@@ -225,22 +300,29 @@ namespace srouter
     }
 
     std::shared_ptr<TCPConnection> TCPHandle::connect(
-        event_base *_ev, quic::Address src, std::shared_ptr<quic::Stream> s, uint16_t port)
+        quic::Loop &ev, const quic::Address &dest, std::shared_ptr<quic::Stream> s)
     {
-        sockaddr_in _addr = src.in4();
-        _addr.sin_port = htons(port);
-
         // NB: BEV_OPT_THREADSAFE not used because this should only ever be touched
         // by a single thread.
-        bufferevent *_bev = bufferevent_socket_new(_ev, -1, BEV_OPT_CLOSE_ON_FREE);
-
-        if (bufferevent_socket_connect(_bev, (struct sockaddr *)&_addr, sizeof(_addr)) < 0)
+        bufferevent *_bev = bufferevent_socket_new(ev.get_event_base(), -1, BEV_OPT_CLOSE_ON_FREE);
+        if (!_bev)
         {
-            log::warning(logcat, "Failed to make bufferevent-based TCP connection!");
+            log::warning(logcat, "Failed to create bufferevent for TCP connection to {}", dest);
             return nullptr;
         }
 
         auto tcp_conn = std::make_shared<TCPConnection>(_bev, -1, std::move(s));
+        tcp_conn->_connected = false;
+
+        bufferevent_setcb(_bev, tcp_read_cb, tcp_write_cb, tcp_event_cb, tcp_conn.get());
+        bufferevent_enable(_bev, EV_READ | EV_WRITE);
+
+        quic::Address target{dest};
+        if (bufferevent_socket_connect(_bev, target, static_cast<int>(target.socklen())) < 0)
+        {
+            log::warning(logcat, "Failed to make bufferevent-based TCP connection to {}!", dest);
+            return nullptr;
+        }
 
         // only set after a call to bufferevent_socket_connect
         tcp_conn->fd = bufferevent_getfd(_bev);
@@ -248,14 +330,11 @@ namespace srouter
         return tcp_conn;
     }
 
-    void TCPHandle::_init_client() {}
-
     void TCPHandle::_init_server(uint16_t port)
     {
-        sockaddr_in _tcp{};
-        _tcp.sin_family = AF_INET;
-        _tcp.sin_addr.s_addr = INADDR_ANY;
-        _tcp.sin_port = htons(port);
+        // Loopback only: the mapped port is for this device's applications, and the documented
+        // establish_*() contract hands back a port on [::1].
+        quic::Address bind_addr{"::1", port};
 
         _tcp_listener = _ev.template shared_ptr<struct evconnlistener>(
             evconnlistener_new_bind(
@@ -264,8 +343,8 @@ namespace srouter
                 this,
                 LEV_OPT_CLOSE_ON_FREE | LEV_OPT_THREADSAFE | LEV_OPT_REUSEABLE,
                 -1,
-                reinterpret_cast<sockaddr *>(&_tcp),
-                sizeof(sockaddr)),
+                bind_addr,
+                static_cast<int>(bind_addr.socklen())),
             evconnlistener_deleter);
 
         if (not _tcp_listener)
@@ -274,8 +353,7 @@ namespace srouter
                 "TCP listener construction failed: {}"_format(evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()))};
         }
 
-        _sock = evconnlistener_get_fd(_tcp_listener.get());
-        check_rv(getsockname(_sock, _bound, _bound.socklen_ptr()));
+        check_rv(getsockname(evconnlistener_get_fd(_tcp_listener.get()), _bound, _bound.socklen_ptr()));
         log::debug(logcat, "tcp listener, bound to {}", _bound);
         evconnlistener_set_error_cb(_tcp_listener.get(), tcp_err_cb);
     }

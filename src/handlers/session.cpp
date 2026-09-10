@@ -12,6 +12,7 @@
 #include "path/transit_hop.hpp"
 #include "router/router.hpp"
 #include "session/session.hpp"
+#include "session/tcp_tunnel.hpp"
 #include "util/bspan.hpp"
 #include "util/logging/buffer.hpp"
 #include "util/random.hpp"
@@ -41,7 +42,7 @@ namespace srouter::handlers
 
             protocol_flag protocols = protocol_flag::PFS_PQ;
             if (!router.embedded())
-                protocols |= protocol_flag::IPV4 | protocol_flag::IPV6;
+                protocols |= protocol_flag::IPV4 | protocol_flag::IPV6 | protocol_flag::TCP_TUNNEL;
 
             client_contact.emplace(
                 router.key_manager.router_id(), netconf.srv_records, protocols, sys_ms{}, netconf.traffic_policy);
@@ -1369,12 +1370,13 @@ namespace srouter::handlers
             }
 
             mapped_remote target{.remote = remote, .port = port};
-            auto& [udp_handle, cports, holders] = _udp_handles[target];
-            bool existing = static_cast<bool>(udp_handle);
-            holders++;
+            auto h_it = _udp_handles.find(target);
+            bool existing = h_it != _udp_handles.end();
             if (!existing)
-
-                udp_handle = std::make_unique<quic::UDPSocket>(
+            {
+                // Construct before inserting and counting: a throwing socket constructor would
+                // otherwise leave behind an entry with a holder that nothing can ever release.
+                auto socket = std::make_unique<quic::UDPSocket>(
                     router.loop().get_event_base(),
                     quic::Address{"::1", 0},
                     /*gso=*/false,
@@ -1451,7 +1453,12 @@ namespace srouter::handlers
                         session->send_session_data_message(packet, traffic_type::UDP);
                     });
 
-            local_port = udp_handle->address().port();
+                h_it = _udp_handles.try_emplace(target).first;
+                h_it->second.socket = std::move(socket);
+            }
+
+            h_it->second.holders++;
+            local_port = h_it->second.socket->address().port();
             log::debug(
                 logcat,
                 "{} mapped UDP port ({}) for remote {}:{}",
@@ -1499,6 +1506,128 @@ namespace srouter::handlers
             _udp_handles.erase(it);
 
             log::debug(logcat, "Unmapped localhost:{} -> {}:{} UDP mapping", local_port, remote, port);
+        });
+    }
+
+    TCPConnection* SessionEndpoint::tunnel_tcp_connection(
+        const mapped_remote& target, bufferevent* bev, TCPConnection::fd_t fd)
+    {
+        std::shared_ptr<session::Session> session;
+        try
+        {
+            // As with UDP, re-obtaining the session per connection is what lets a mapping survive an
+            // idle timeout and re-establish itself on the next use.
+            session = initiate_remote_session(target.remote);
+        }
+        catch (const std::exception& e)
+        {
+            log::warning(
+                logcat, "Cannot obtain a session to {} for a tunnelled TCP connection: {}", target.remote, e.what());
+            return nullptr;
+        }
+
+        if (!session)
+        {
+            log::warning(logcat, "Dropping TCP connection for unreachable remote {}", target.remote);
+            return nullptr;
+        }
+
+        if (auto accepts = session->remote_accepts_tcp(); accepts.has_value() && !*accepts)
+        {
+            log::warning(logcat, "Dropping TCP connection: {} does not accept tunnelled TCP", target.remote);
+            return nullptr;
+        }
+
+        return session->tunnel().connect_stream(bev, fd, target.port);
+    }
+
+    std::optional<std::pair<uint16_t, std::shared_ptr<session::Session>>> SessionEndpoint::map_tcp_remote_port(
+        const NetworkAddress& remote, uint16_t port)
+    {
+        return router._jq->call_get([&]() -> std::optional<std::pair<uint16_t, std::shared_ptr<session::Session>>> {
+            std::pair<uint16_t, std::shared_ptr<session::Session>> result;
+            auto& [local_port, session] = result;
+
+            session = initiate_remote_session(remote);  // throws on immediate error
+            if (!session)
+            {
+                log::debug(logcat, "Not mapping a TCP port for {}: remote is unreachable", remote);
+                return std::nullopt;
+            }
+
+            // A remote we know cannot terminate a tunnelled stream gets refused now rather than at
+            // connection time.  Not knowing (no client contact yet) is not a refusal: we map, and
+            // find out when the contact arrives.
+            if (auto accepts = session->remote_accepts_tcp(); accepts.has_value() && !*accepts)
+            {
+                log::debug(logcat, "Not mapping a TCP port for {}: remote does not accept tunnelled TCP", remote);
+                return std::nullopt;
+            }
+
+            mapped_remote target{.remote = remote, .port = port};
+
+            auto it = _tcp_handles.find(target);
+            if (it == _tcp_handles.end())
+            {
+                std::shared_ptr<TCPHandle> listener;
+                try
+                {
+                    listener = TCPHandle::make_server(
+                        router.loop(), [this, target](bufferevent* bev, TCPConnection::fd_t fd) -> TCPConnection* {
+                            return tunnel_tcp_connection(target, bev, fd);
+                        });
+                }
+                catch (const std::exception& e)
+                {
+                    log::error(logcat, "Failed to bind a local TCP port for {}: {}", remote, e.what());
+                    return std::nullopt;
+                }
+
+                it = _tcp_handles.try_emplace(target).first;
+                it->second.listener = std::move(listener);
+            }
+
+            it->second.holders++;
+            local_port = it->second.listener->port();
+
+            log::debug(logcat, "Mapped TCP [::1]:{} -> {}:{}", local_port, remote, port);
+            return result;
+        });
+    }
+
+    void SessionEndpoint::unmap_tcp_remote_port(const NetworkAddress& remote, uint16_t port)
+    {
+        // As in map_tcp_remote_port: these containers belong to the job queue thread, and an
+        // embedded caller can be on any thread at all.
+        router._jq->call_get([&] {
+            auto it = _tcp_handles.find(mapped_remote{.remote = remote, .port = port});
+            if (it == _tcp_handles.end())
+            {
+                log::debug(logcat, "Nothing to unmap: {}:{} is not currently a mapped TCP port", remote, port);
+                return;
+            }
+
+            if (--it->second.holders > 0)
+            {
+                log::debug(
+                    logcat,
+                    "Released a claim on {}:{}; {} still held, keeping it mapped",
+                    remote,
+                    port,
+                    it->second.holders);
+                return;
+            }
+
+            auto local_port = it->second.listener->port();
+            _tcp_handles.erase(it);
+
+            // Releasing the last claim takes the mapping's connections with it: holding the claim is
+            // what keeps them alive, so there is nothing left to keep them for.
+            if (auto* session = get_session(remote))
+                if (auto* tunnel = session->maybe_tunnel())
+                    tunnel->close_connections_for(port);
+
+            log::debug(logcat, "Unmapped localhost:{} -> {}:{} TCP mapping", local_port, remote, port);
         });
     }
 

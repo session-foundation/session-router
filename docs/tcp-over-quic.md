@@ -1,238 +1,155 @@
-# "embedded" TCP-over-QUIC
+# Tunnelled TCP
 
-In order for Session Router to work in an embedded version (which I will call "embedded" in this
-document), which Session Router cannot create TUN device (either because the host OS doesn't support them,
-or because Session Router needs to run without permissions to manage them) Session Router needs a solution for
-sending TCP data from the device to a remote Session Router client (i.e. a snapp, a snode, or another
-embedded client).  Since the vast majority of network connectivity relies on TCP stream
-connections, not supporting them would be a severe limitation of a Session Router library that would make
-it nearly useless.
+Session Router carries TCP for embedded clients by tunnelling it inside a QUIC connection nested in
+the session's data channel.
 
-Traditional "full" Session Router does not need to solve this problem: it creates virtual IPs on the TUN
-interface that map to every looked-up `.loki` address and then the host system's in-kernel TCP layer
-handles the intricacies of TCP including acknowledgement, retry, and so on.  While there are
-user-space TCP implementations available, they are generally incomplete, unmaintained, or both,
-which would mean substantial work and ongoing maintenance for us to adopt or reimplement such a
-user-space TCP layer, for which we would most likely be the only user and contributor.
+An embedded client (one linking `libsessionrouter-core`, with no permission or ability to create a TUN
+device) cannot put raw IP packets on the wire the way a full client does, and cannot obtain raw IP
+packets for its own application's loopback socket either.  Session path data is also deliberately
+unreliable — encapsulated packets carried as QUIC datagrams between hops, with no acknowledgement,
+sequencing or retransmission anywhere along the way — so something has to supply reliability in
+process.  Rather than implement a TCP stack to do it, we nest a QUIC connection inside the session and
+let it provide retransmission, ordering, flow control, congestion control and per-stream error codes.
 
-Instead this proposal is for Session Router to support a tunneled TCP stream mode where TCP traffic is
-carried over Session Router via a subset of the
-[QUIC](https://datatracker.ietf.org/doc/draft-ietf-quic-transport/) protocol.  Unlike TCP, QUIC has
-several well-maintained user-space implementations which allow us to use, rather than create, a
-well-maintained QUIC implementation.
+## Scope
 
-## Overview
+Supported: **an embedded client connecting out to a full client.**  The embedded side initiates; the
+full (tun) side accepts and terminates each stream into a real TCP connection to its own tun address.
 
-The high-level strategy of how we handle such a stream connection is to have TCP connections
-established only within the local device.  A embedded application would invoke a Session Router call to
-establish such a connection to proxy to a remote host by Session Router name and TCP port.  This would
-first establish a Session Router connection to the remote host, then open a QUIC connection over it and
-start listening for TCP connections on a local port.  When a new TCP connection is established on
-this port Session Router will establish a new QUIC stream over the existing connection, specifying the
-destination port while initializing the stream.  (The client is free to establish as many TCP
-connections as it wants: each one becomes a separate QUIC stream).
+Not supported, deliberately:
 
-The situation is similar for the receiving Session Router client: it would listen for incoming QUIC
-connections on the local Session Router IP and, when establishing a QUIC stream, would establish a local
-TCP connection to the requested port on the Session Router IP.  Any incoming stream data is then forwarded
-into this TCP connection, and any responses are sent back via the QUIC stream.
+- **Inbound TCP to an embedded client.**  An embedded client cannot accept tunnelled connections.
+  Earlier drafts of this document proposed a registration callback for this, plus SYN interception on
+  full clients wanting to reach an embedded one; none of that is built.
+- **Relays.**  A relay is reachable by QUIC natively, so `establish_udp` already covers everything
+  needed there.
 
-## Example
+## Data path
 
-For example, suppose `snap7.loki` is a Session Router snapp with a web server listening on port 80 and a
-embedded client `omg42.loki` wants to connect to it to retrieve a cat photo.  With a full
-Session Router client, the DNS request for `omg56789.loki` triggers creation of a virtual IP on the TUN
-device, returns the IP to the system, and any TCP packets sent to this IP are forwarded to the
-primary Session Router IP of `azfoj123.loki`, where an HTTP server is ready and waiting to provide cat
-photos.
+    ┌ embedded client ─────────┐                              ┌ full client ───────────┐
+    │ application              │                              │ service                │
+    │ TCP -> [::1]:47165 ──────│─┐                            │ TCP 10.0.0.1:80 <──────│─┐
+    ├──────────────────────────┤ │                            ╞════════════════════════╡ │
+    │ session router (in app)  │ │                            │ session router         │ │
+    │ one QUIC stream per conn │ └─ ... session router path ─┐ │                        │ │
+    │ inside one QUIC conn ────│────  (unreliable datagrams) └─│─> stream -> TCP connect┘ │
+    │ [::1]:47165 <────────────│─┐                            │ to its own tun address   │
+    └──────────────────────────┘ └────────────────────────────│──────────────────────────┘
 
-With a embedded client, this process will looks a little different: the client will first make a
-call to the embedded library (rather than a DNS request) specifying the Session Router host name and TCP
-port it wants to connect to (note that this is pseudo-code; the actual implementation calls will
-have to deal with various details such as connection delays and timeouts that are omitted here):
+The application connects to a port on `[::1]` that `establish_tcp` hands back.  Each connection to
+that port opens one stream on the tunnel's QUIC connection; the far end reads the destination port
+from the head of the stream and makes a matching TCP connection locally.  Both directions are then
+just data on the stream.
 
-    result = session_router_stream_connect(session_router_addr, port)
-    if result->connection_established:
-        http_get("http://" + result->local_address + ":" + result->local_port + "/cat.jpg")
+## Wire details
 
-Here `http_get` would need no knowledge of Session Router at all: it will simply connect via TCP to an
-address such as `127.0.0.1:4716` for the HTTP request.  It will send the request, and receive it,
-over this localhost TCP socket.
+**Stream preamble.**  The first two bytes of each stream are the destination port, big-endian.  The
+accepting side buffers until it has both, then connects; anything already received beyond the preamble
+is written to the socket ahead of whatever the socket subsequently carries.  Port 0 is refused.
 
-Internally, Session Router will have established a QUIC connection to the remote host, and started
-listening for TCP connections on the localhost port.  When `http_get` establishes a TCP connection
-on this local port it will create a QUIC stream on the established QUIC connection and forward all
-stream data received from the TCP connection into the QUIC stream, and any data that comes back over
-the QUIC stream will similarly be copied into the localhost TCP connection.
+**Capability advertisement.**  A client that can accept tunnelled TCP sets `protocol_flag::TCP_TUNNEL`
+(`1 << 5`) in its client contact, which in practice means any client with a tun device.  An initiator
+that already holds a contact without that flag refuses to map a port at all, rather than mapping one
+that could never carry anything; if the contact only arrives later and lacks the flag, the failure is
+reported as `tunnel_failure::no_tcp`.
 
-Effectively the data path of data send from the app on omg42.loki to the HTTP snapp on omg42.loki
-looks like this:
+Note this is a *new* flag rather than 1.0.x's `QUIC_TUNNEL` (`1 << 1`), which advertised the opposite
+role — "I am embedded, reach me via a tunnel" — and was therefore set by exactly the clients that
+cannot accept one.
 
-    ┌omg42.loki────────────┐                             ┌snap7.loki───────────┐
-    │ Main app thread      │                             │ HTTP                │
-    │ TCP localhost:4567 ─>│─┐                           │ TCP 172.16.0.1:80 <─│─┐
-    ├──────────────────────┤ │                           ╞═════════════════════╡ │
-    │ embedded (in app)  │ │                           │ Session Router (on host)   │ │
-    │ TCP localhost:4567 <─│─┘                         ┌>│─> QUIC UDP          │ │
-    │           QUIC UDP ─>│───... Session Router routers ...─┘ │ TCP 172.16.0.1:80 ─>│─┘
-    └──────────────────────┘                             └─────────────────────┘
+**No encryption of its own.**  The inner connection needs neither authentication nor encryption: the
+session layer already encrypts end to end, the path layer onion-encrypts, and the session has already
+authenticated the peer.  It therefore uses libquic's `DangerouslyUnencryptedCreds`, which replaces
+QUIC's AEAD with a no-op and its TLS handshake with a fixed exchange carrying only the transport
+parameters.  That removes a second encryption pass over every byte and the gnutls handshake that used
+to precede any data.
 
-(These connections are all bi-direction, so any TCP stream data replied from omg42.loki follows the
-same path in reverse.)
+Both ends must be doing this: such a connection cannot talk to an ordinary QUIC endpoint and fails the
+handshake rather than falling back, which is what the `TCP_TUNNEL` capability flag exists to avoid.
 
-## Implementation details/notes
+**Packet sizing.**  The inner connection is capped at the QUIC minimum (1200 bytes).  An inner packet
+becomes a 1278-byte session message once session and path overhead (78 bytes) are added, which rides in
+a single path datagram as long as the outer hop's payload is at least 1324 bytes; below that it is
+split in two and both halves must survive.  Dropping the inner cap to 1076 would make splitting
+impossible on any path, but libquic currently refuses a cap below 1200.
 
-Implementation library: `ngtcp2` is a robust, maintained library that fits our needs well.
+**Idle handling.**  QUIC closes a connection with no activity at all on it, which would kill a TCP
+connection that is merely idle, so the inner connection sends keep-alive pings.  To avoid paying for
+those on a tunnel nobody is using, the inner connection is torn down a minute after its last stream
+goes away, and rebuilt on demand.
 
-### Not a general QUIC server/client
+## Backpressure
 
-The QUIC tunnel described here is *only* for Session Router TCP streams; it is not intended to be
-interoperable with general QUIC clients, which allows us some leeway to not support some aspects of
-QUIC that are of no advantage over a Session Router conversation.
+Both directions are flow-controlled, since either end can be the slow one:
 
-### No encryption
+- application → tunnel: stream watermarks stop reading from the local socket when the tunnel falls
+  behind, and resume when it drains.
+- tunnel → application: a bufferevent's output buffer grows without limit and so signals nothing on
+  its own, so the stream is paused once the queued output passes a threshold and resumed from the
+  write callback once it drains.
 
-Since Session Router traffic is itself encrypted and private, the built-in TLS layers of QUIC are something
-that we don't need or want.  Thus the QUIC implementation used will simply use no-op encryption to
-pass data and avoid/ignore certificates.  (`ngtcp2`, in particular, allows pluggable authentication
-to allow this).
+## Close semantics
 
-### No address verification
+Distinguishing an orderly close from a failure matters: conflating them truncates transfers silently,
+which is exactly what went wrong in the previous (lokinet 0.9.x, ngtcp2) implementation of this idea.
 
-QUIC recommends address verification (among other things, to avoid amplification attacks).  Session Router
-connections already provide this and so we can safely not use it.
+| Event | Action |
+|---|---|
+| Local TCP EOF (clean) | send FIN on the stream; keep receiving (a real half-close) |
+| Local TCP error | close the stream with `TCP_FAILURE` |
+| Stream FIN received | shut down the socket's write side, but only once queued output has drained |
+| Stream closed with an error | drop the local connection without a clean FIN |
+| Accepting side cannot connect | close the stream with `CONNECT_FAILED` |
+| Accepting side refuses the port | close the stream with `REFUSED` |
 
-### Stream establishing
+## Using it
 
-Establishing a QUIC stream requires sending additional information during connection: namely the
-target connection port.  Thus establishing a new stream will require some additional data to be
-passed, likely as the initial stream data.  (Specification of how this data is to be encoded is not
-yet specified).
-
-### Incoming TCP-over-QUIC connections
-
-Handling of incoming connections to a embedded client will require a similar process, but in
-reverse:
-
-- the client starts listening on a localhost TCP port
-- the client makes a call to embedded to inform it of this available listening port
-- incoming QUIC tunneled streams attempting to connect to that registered port are accepted and
-  establish a new TCP connection as long as the stream stays open; data is forwarded between the two
-  connections.
-- Should the client require end-point verification embedded will provide a function that can look
-  up the remote Session Router address based on the source port of the TCP connection.  (This is different
-  from but analogous to a snapp doing a reverse DNS lookup on the source address to determine the
-  remote address).
-
-Note: to be externally reachable by other Session Router clients, a embedded client would have to publish
-an introset; this introset would also include an additional flag indicating that TCP connections
-must be tunneled through a TCP-over-QUIC connection.
-
-Note 2: we additionally may want to signal during connection that new TCP connections back to us
-should be done over a QUIC tunnel, which requires also adding a flag when establishing the
-Session Router conversation.
-
-### Non-tunneled incoming TCP connections
-
-Without a controllable TCP stack we have no ability to accept these, however since the introset (and
-conversation initiation) indicates that TCP should be tunneled, we should just drop these packets.
-
-## Session Router implementation notes
-
-### Outbound connections -- embedded
-
-The application makes a embedded library call such as
-
-    session_router_stream_result res;
-    session_router_outbound_stream(&res, "some-snapp.loki", 2345);
-
-This initiates an outbound connection to the given Session Router remote, asking to connect to port 2345 on
-the remote.  Plainquic begins listening on a random localhost port, and returns this via an entry in
-`res`.  New connections establishes to this localhost port initiate new streams on the quic
-connection which are tunneled to the remote end.
-
-### Inbound connections -- embedded
-
-The application needs to start listening on one or more TCP ports (e.g. on localhost, but doesn't
-have to be) and then registers a callback with Session Router about the availability of this port for
-incoming plainquic connections by setting up a callback:
-
-```C
-    int accept_inbound(const char *session_router_addr, uint16_t port, sockaddr *addr, void *context) {
-        // session_router_addr is the remote Session Router client trying to establish a stream
-        // port is the port they are trying to reach
-        // If the client is allowed then set the local TCP socket address that the tunnel should
-        // connect to in `addr` (which is big enough to allow either sockaddr_in or sockaddr_in6)
-        sockaddr_in* a = (sockaddr_in*)addr;
-        a->sin_family = AF_INET;
-        a->sin_addr = INADDR_LOOPBACK;
-        a->sin_port = htons(5678); // NB: Doesn't have to be the passed-in `port`
-        return 0;
-        // If this callback doesn't handle the requested port (will try other callbacks):
-        return -1;
-        // If this callback does handle it and the connection should be refused:
-        return -2;
-        // (Return values other than 0/-1/-2 are reserved and should not be used).
-    }
-    session_router_inbound_stream(&accept_inbound, NULL /*context*/);
-```
-or, for the very simple case where connections should be available on some localhost port:
-```C
-    // All incoming tunneled connections for port 5678 should go to localhost:5678
-    session_router_inbound_stream_simple(5678);
+```c++
+// Holding the claim is what keeps the tunnel up.
+session::router::tcp_tunnel tcp = router.establish_tcp(
+        "kcpyawm9se7trdbzncimdi5t7st4p5mh9i1mg7gkpuubi4k4ku1y.sesh", 80,
+        [](auto info) { /* ready: connect to [::1]:info.local_port */ },
+        [](auto failure) { /* unreachable, unsupported, or timeout */ });
 ```
 
-When a new plainquic connection arrives, if such a callback has been registered it will be called to
-determine whether the connection should be accepted and, if it is, where streams opened on that
-connection should be sent.  (For the simple version, all inbound connections on port 5678 would be
-accepted and would be forwarded to localhost:5678; inbound connections for other ports would be
-refused).
+The application then makes ordinary TCP connections to `[::1]:tcp->local_port`, as many as it likes;
+each becomes a separate connection to port 80 on the remote.
 
-Each new plainquic stream initiated by the remote connection then establishes a new TCP connection
-to the IP/port set by the callback.
+Releasing the claim (destroying it, or calling `reset()`) closes the listening port *and* the
+connections established through it.  Asking for a remote and port that is already mapped hands back
+another claim on the same mapping rather than a new one, so releasing one claim never pulls the tunnel
+out from under another holder.
 
-### Outbound connections - full Session Router
+## Acceptor policy
 
-When attempting to connect to a client who has indicated in its introset that it requires plainquic
-connections then plainquic will bind to and listen on the virtual (tun) TCP/IP port and establish a
-plainquic connection to the remote embedded on the given port.  (Future connections to this port
-will establish new streams on the existing connection).
+The accepting side connects to **its own tun address** on whatever port the stream asks for.  Any port
+is allowed, which is parity with how tun mode already behaves: a remote sending raw IP packets to a
+full client's tun address can likewise reach anything listening there.  If that ever needs narrowing,
+an allow-list belongs in config rather than in the tunnel.
 
-Setting up the initial listener involves intercepting the initial TCP connection attempt (i.e. the
-SYN packet), starting to listen on it while simultaneously initiating the plainquic connection over
-session_router.  It may work sufficiently well (investigation required) to simply drop this initial SYN
-packet and let the initiator retry in a few moments to attack to the new listener which now goes
-into the plainquic listener which establishes a new stream.
+## Known gaps
 
-Thereafter the local application simply talks to this local listener and all stream data gets
-tunneled over Session Router to the remote embedded.
+- The first TCP connection through a mapping waits a path round trip for the inner handshake.
+  Subsequent ones do not: the connection persists until a minute after its last stream, so this is one
+  RTT per inner connection rather than per TCP connection.
 
-### Inbound connections - full Session Router
+  Opening the inner connection when the mapping is made, rather than on first use, would not help:
+  establish_tcp() hands back the bound port synchronously, so an application can connect straight away
+  without waiting for the session, and that connection already starts the inner handshake, whose
+  Initial waits in the pre-establishment queue and flushes as soon as the session is up.  Opening it
+  earlier would queue the same packet slightly sooner, for every mapping including unused ones, each
+  with its keep-alives -- which is what the idle teardown exists to avoid.
 
-This is fairly simple: when incoming quic-tunneled packets arrive we start up a plainquic server (if
-not already running), deliver the packets into it, and it tunnels incoming stream data into TCP
-connections to the primary Session Router IP (using the IP mapped to the Session Router endpoint as the source
-address).
+  The remaining round trip is not a scheduling problem: the inner handshake cannot complete before the
+  session that carries it exists.
 
-
-TODO:
-- Add quic protocol type to llarp/service/protocol_types.hpp
-- Convert stuff in plainquic code to use Session Router structures (e.g. logging, address encapsulation)
-- Add handler for QUIC packets to llarp/handlers/tun.cpp that see that protocol type and forward the
-  packet off to the quic server to handle.
-- Get at the uvw event loop from the quic code so that we can put the plainquic stuff onto it rather
-  than spinning up its own event loop.  I was thinking about something like:
-  `virtual std::shared_ptr<void> get_uvw_loop() { return nullptr; }` in ev.h, and an override that
-  returns the uvw event loop in the ev_libuv.h subclass (the type erasure through the shared_ptr<void>
-  means ev.h doesn't have to depend on any uvw.h headers).  Then the quic code can just do something
-  like:
-    auto uv_loop = std::static_pointer_cast<uvw::Loop>(ev->get_uvw_loop());
-    if (not uv_loop) { die("horribly"); }
-- convert the crap in the `main` functions copied from plainquic test code to exposed library calls.
-- decide whether we start up a quic server and/or client on demand, or just always start it.
-
-
-Outgoing conns:
-- Add "supported protocols" item to introset and (for embedded) leave off IPv4/v6 flags, but add
-  quic protocol flag.
-
+  Skipping the handshake entirely is a bigger job than "we have no secrets to establish": QUIC only
+  allows stream data in 0-RTT or 1-RTT packets, so it means driving ngtcp2's 0-RTT space directly --
+  null 0-RTT keys, a faked early-data acceptance, and pre-provisioned server transport parameters
+  (which resumption normally supplies) that must not overstate what the server actually allows.
+- A sub-1200 inner packet cap, so an inner packet never splits across two path datagrams; libquic
+  currently refuses a cap below the QUIC minimum.
+- Nothing here handles IPv4: the accepting side connects to the tun's IPv6 address only, deliberately,
+  as IPv4 is on its way out.  A tun client with no IPv6 address cannot accept tunnelled TCP.
+- Nested congestion control (the inner connection's BBR inside each hop's BBR, over a channel whose
+  congestion shows up as deep buffering rather than loss) is unmeasured.

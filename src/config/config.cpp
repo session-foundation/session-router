@@ -1220,6 +1220,13 @@ namespace srouter
                 "Logging settings",
             });
 
+        // quic logs a line per stream open and close at info, which is noise for a client that
+        // tunnels TCP.  Embedded clients get nothing so that an embedding application's own
+        // oxen::logging setup is left alone.
+        const std::string default_log_levels = conf.type == config::Type::Relay ? "warn"
+            : conf.type == config::Type::FullClient                             ? "*=info, quic=warn"
+                                                                                : "";
+
         conf.define_option<std::string>(
             "logging",
             "type",
@@ -1246,15 +1253,20 @@ namespace srouter
         conf.define_option<std::string>(
             "logging",
             "level",
-            Default{
-                conf.type == config::Type::Relay            ? "warn"
-                    : conf.type == config::Type::FullClient ? "info"
-                                                            : ""},
-            [this](std::string arg) { levels = std::move(arg); },
+            Default{default_log_levels},
+            [this, defaults = default_log_levels](std::string arg) {
+                // Category settings are cumulative, so appending is all that is needed: a setting
+                // naming only categories ("tcp=debug") adjusts the defaults, while one naming a
+                // global level ("debug") resets everything before it and so replaces them.
+                levels = defaults.empty() || arg.empty() || arg == defaults ? std::move(arg) : defaults + ", " + arg;
+            },
             Comment{
                 "Minimum log severity level to print. Logging below this level will be ignored.",
                 "Can also be set to a comma-separated list of individual categories, such as:",
                 "    *=warn, logcat123=debug",
+                "",
+                "Setting only categories, without a global level, adjusts the defaults rather than",
+                "replacing them, so e.g. 'tcp=debug' keeps the default level for everything else.",
                 "",
                 "Valid log levels, in ascending order, are:",
                 "  trace, debug, info, warn, error, critical, off",

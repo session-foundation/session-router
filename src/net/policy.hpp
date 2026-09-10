@@ -15,12 +15,23 @@ namespace srouter
         NONE = 0,
         // 1 << 0,  // Not currently used.
         // 1 << 1,  // Not currently used.
-        IPV4 = 1 << 2,    // This client support Session Router raw IPv4 packets (currently always
-                          // set for non-embedded clients)
-        IPV6 = 1 << 3,    // This client support Session Router raw IPv6 packets (currently always
-                          // set for non-embedded clients)
-        PFS_PQ = 1 << 4,  // This client supports PFS+PQ session initiation.  This flag will be
-                          // dropped in the future, once 1.0.x Session Router support is dropped.
+        IPV4 = 1 << 2,        // This client support Session Router raw IPv4 packets (currently always
+                              // set for non-embedded clients)
+        IPV6 = 1 << 3,        // This client support Session Router raw IPv6 packets (currently always
+                              // set for non-embedded clients)
+        PFS_PQ = 1 << 4,      // This client supports PFS+PQ session initiation.  This flag will be
+                              // dropped in the future, once 1.0.x Session Router support is dropped.
+        TCP_TUNNEL = 1 << 5,  // This client accepts tunnelled TCP connections, i.e. it can terminate
+                              // a tunnelled stream into a local TCP connection.  Set only by clients
+                              // with a tun device; an initiator without this flag on the remote
+                              // should not bother trying.
+                              //
+                              // NB: this is deliberately a new bit rather than 1.0.x's QUIC_TUNNEL
+                              // (1 << 1), which advertised the opposite role: it meant "I am
+                              // embedded, so reach me via a tunnel", and was set by clients that
+                              // cannot accept one.  Redefining it would make every 1.0.x embedded
+                              // client look like an acceptor.  Bit 0 (1.0.x EXIT) is likewise in use
+                              // in the wild.
     };
     inline constexpr protocol_flag operator&(protocol_flag a, protocol_flag b)
     {

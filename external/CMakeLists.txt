@@ -46,7 +46,7 @@ endif()
 
 
 set(LIBQUIC_BUILD_TESTS OFF CACHE BOOL "")
-sessiondep_or_submodule(liboxenquic 1.8.0 oxen-libquic oxen::quic)
+sessiondep_or_submodule(liboxenquic 1.9.0 oxen-libquic oxen::quic)
 
 
 # libcrypt defaults, only on with macos and non static linux
