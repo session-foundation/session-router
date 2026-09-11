@@ -1296,10 +1296,15 @@ namespace srouter::handlers
                         s = router._jq->make_shared<session::OutboundRelaySession>(
                             remote, *this, tag, std::move(on_attempted), timeout);
 
-                    // A relay session resolves its RC during construction, so if the relay has no
+                    // A relay session looks its RC up during construction, so if the relay has no
                     // RC we already know the session can never establish.  Don't register it: the
                     // caller gets nullptr, and a later attempt builds a fresh session that looks
                     // the RC up again rather than reusing this verdict.
+                    //
+                    // Only catches a lookup that answered inline, which is the usual case but not
+                    // the one that hurts: before the first RC fetch completes NodeDB::lookup_rc
+                    // queues the callback, and the verdict lands after we have registered the
+                    // session.  OutboundSession::tick closes it when that happens.
                     if (s->is_unreachable())
                         return std::shared_ptr<session::Session>{nullptr};
 

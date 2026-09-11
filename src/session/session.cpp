@@ -1082,6 +1082,22 @@ namespace srouter::session
         if (_is_closed)
             return;
 
+        // No relay contact for the remote means no path can ever pivot through it, so there is
+        // nothing to build and re-attempting only burns ticks.
+        //
+        // Such a session is normally discarded at construction -- SessionEndpoint::make_session
+        // checks is_unreachable() before registering it -- but that only catches a lookup that
+        // answered inline.  Until the first RC fetch completes, NodeDB::lookup_rc queues the
+        // callback rather than answering, so the verdict arrives after we have been registered and
+        // there is nobody left to discard us.  Close here instead, which is the same thing the
+        // constructor-time check does, just later.
+        if (_unreachable)
+        {
+            log::debug(logcat, "{} is unreachable; closing session rather than rebuilding", _remote);
+            _parent.close_session(_inbound_tag, false);
+            return;
+        }
+
         close_old_paths(now);
         path::PathHandler::tick(now);
         fire_waiting();

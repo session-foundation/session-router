@@ -421,18 +421,14 @@ local docs_pipeline(name, image, extra_cmds=[], allow_fail=false) = {
                   oxen_repo=[],
                   cmake_extra='-DBUILD_STATIC_DEPS=ON -DBUILD_SHARED_LIBS=OFF -DSTATIC_LINK=ON'),
 
-  debian_pipeline('Debian 11/bullseye',
-                  docker_base + 'debian-bullseye',
-                  deps=default_deps(remove='libcli11-dev')),
-
   // Static builds (uploaded to builds.lokinet.dev).  In general:
   // - armhf and arm64 build on the oldest debian distro we support.  Technically there is some
   //   arm64 ubuntu support, but the arm linux ecosystem seems to much more built on top of debian
   //   rather than ubuntu.
   // - amd64 we build on the oldest Debian *or* Ubuntu distro, so that it should work on that or
   //   anything newer.
-  debian_pipeline('Static armhf (Debian 11/bullseye)',
-                  docker_base + 'debian-bullseye/arm32v7',
+  debian_pipeline('Static armhf (Debian 12/bookworm)',
+                  docker_base + 'debian-bookworm/arm32v7',
                   arch='arm64',
                   deps=static_deps,
                   tests=false,
@@ -445,8 +441,8 @@ local docs_pipeline(name, image, extra_cmds=[], allow_fail=false) = {
                     'UPLOAD_OS=linux-armhf ./contrib/ci/drone-static-upload.sh',
                   ],
                   jobs=4),
-  debian_pipeline('Static arm64 (Debian 11/bullseye)',
-                  docker_base + 'debian-bullseye',
+  debian_pipeline('Static arm64 (Debian 12/bookworm)',
+                  docker_base + 'debian-bookworm',
                   arch='arm64',
                   deps=static_deps,
                   tests=false,
@@ -459,8 +455,8 @@ local docs_pipeline(name, image, extra_cmds=[], allow_fail=false) = {
                     'UPLOAD_OS=linux-armhf ./contrib/ci/drone-static-upload.sh',
                   ],
                   jobs=4),
-  debian_pipeline('Static AMD64 (Debian 11/bullseye)',
-                  docker_base + 'debian-bullseye',
+  debian_pipeline('Static AMD64 (Ubuntu jammy)',
+                  docker_base + 'ubuntu-jammy',
                   deps=static_deps,
                   lto=true,
                   tests=false,
