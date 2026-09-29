@@ -1,3 +1,9 @@
+session-router (1.0.2-1~ubuntu2610) stonking; urgency=medium
+
+  * Stonking deb
+
+ -- Jason Rhinelander <jason@session.foundation>  Tue, 29 Sep 2026 16:32:13 -0300
+
 session-router (1.0.2-1~ubuntu2604) resolute; urgency=medium
 
   * Resolute deb
