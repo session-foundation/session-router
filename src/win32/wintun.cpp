@@ -171,7 +171,12 @@ namespace srouter::win32
                             break;
                         Sleep(50);
                     }
-                    throw win32::error{err, fmt::format("cannot set address '{}'", label)};
+                    // If IPv6 address add fails, warn and continue so IPv4 still works.
+                    log::warning(
+                        logcat,
+                        "cannot set IPv6 address '{}' (winerr={}); continuing IPv4-only",
+                        label,
+                        err);
                 };
                 for (const auto& addr : info.addrs)
                 {
