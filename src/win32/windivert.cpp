@@ -6,6 +6,7 @@
 #include "util/logging.hpp"
 #include "util/logging/buffer.hpp"
 #include "util/thread/queue.hpp"
+#include <span>
 
 #include <winsock2.h>
 
@@ -27,7 +28,7 @@ namespace
         {
             case WINDIVERT_LAYER_NETWORK:
                 layer_str = "WINDIVERT_LAYER_NETWORK";
-                ifidx_str = "Network: [IfIdx: {}, SubIfIdx: {}]"_format(addr.Network.IfIdx, addr.Network.SubIfIdx);
+                ifidx_str = fmt::format("Network: [IfIdx: {}, SubIfIdx: {}]", addr.Network.IfIdx, addr.Network.SubIfIdx);
                 break;
             case WINDIVERT_LAYER_NETWORK_FORWARD:
                 layer_str = "WINDIVERT_LAYER_NETWORK_FORWARD";
@@ -174,7 +175,7 @@ namespace srouter::win32
             {
                 WINDIVERT_ADDRESS addr{};
                 std::vector<uint8_t> pkt;
-                pkt.resize(1500);  // net::IPPacket::MaxSize
+                pkt.resize(1500);  // MAX_PACKET_SIZE
                 UINT sz{};
                 if (not wd::recv(m_Handle, pkt.data(), pkt.size(), &sz, &addr))
                 {
@@ -218,19 +219,17 @@ namespace srouter::win32
 
             virtual int PollFD() const { return -1; }
 
-            bool write_packet(net::IPPacket) override { return false; }
+            bool write_packet(IPPacket) override { return false; }
 
-            net::IPPacket read_next_packet() override
+            IPPacket read_next_packet() override
             {
                 auto w_pkt = m_RecvQueue.tryPopFront();
                 if (not w_pkt)
-                    return net::IPPacket{};
-                net::IPPacket pkt{std::move(w_pkt->pkt)};
-                pkt.reply = [this, addr = std::move(w_pkt->addr)](auto pkt) {
-                    if (!m_Shutdown)
-                        send_packet(Packet{pkt.steal(), addr});
-                };
-                return pkt;
+                    return IPPacket{};
+                // IPPacket no longer carries a reply callback / steal(); build from bytes.
+                // DNS reinject via write_packet is not wired (parity with prior stub write).
+                return IPPacket{std::span<const std::byte>{
+                    reinterpret_cast<const std::byte*>(w_pkt->pkt.data()), w_pkt->pkt.size()}};
             }
 
             void Start() override

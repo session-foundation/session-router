@@ -2,6 +2,8 @@
 
 #include "address/map.hpp"
 #include "ev/fd_poller.hpp"
+
+#include <oxen/quic/timer_id.hpp>
 #include "handlers/tun_interface.hpp"
 #include "net/ip_packet.hpp"
 #include "util/thread/threading.hpp"
@@ -35,6 +37,9 @@ namespace srouter::handlers
 
         std::shared_ptr<vpn::NetworkInterface> _net_if;
         std::unique_ptr<ev::FDPoller> _poller;
+        // Windows/Wintun: PollFD()==-1 so FDPoller is skipped; this JobQueue
+        // timer drains _recv_queue → handle_ip_packet.
+        oxen::quic::TimerID _win_drain_timer;
 
         std::shared_ptr<vpn::PacketRouter> _packet_router;
 

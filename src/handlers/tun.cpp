@@ -131,6 +131,11 @@ namespace srouter::handlers
 
     void TunEndpoint::stop()
     {
+        if (_win_drain_timer)
+        {
+            _router._jq->remove(_win_drain_timer);
+            _win_drain_timer = {};
+        }
         // stop vpn tunnel
         if (_net_if)
             _net_if->Stop();
@@ -499,7 +504,25 @@ namespace srouter::handlers
 
     void TunEndpoint::start_poller()
     {
-        _poller = std::make_unique<ev::FDPoller>(_router.loop(), _net_if->PollFD(), [this] {
+        // Wintun (and apple) PollFD is always -1: packet IO is threaded. Arming
+        // ev::FDPoller(-1) can AV under MinGW (0xC0000005). Keep FDPoller OFF and
+        // drain the recv queue on a 20ms JobQueue timer instead.
+        const auto pfd = _net_if->PollFD();
+        if (pfd < 0)
+        {
+            log::warning(logcat, "Skipping TUN FDPoller; PollFD={} is not a waitable socket", pfd);
+            log::debug(logcat, "start_poller arm tun drain timer");
+            _win_drain_timer = _router._jq->add_timer(20ms, [this]() {
+                for (auto pkt = _net_if->read_next_packet(); not pkt.empty();
+                     pkt = _net_if->read_next_packet())
+                {
+                    log::trace(logcat, "packet router receiving {}", pkt.info_line());
+                    _packet_router->handle_ip_packet(std::move(pkt));
+                }
+            });
+            return;
+        }
+        _poller = std::make_unique<ev::FDPoller>(_router.loop(), pfd, [this] {
             for (auto pkt = _net_if->read_next_packet(); not pkt.empty(); pkt = _net_if->read_next_packet())
             {
                 log::trace(logcat, "packet router receiving {}", pkt.info_line());

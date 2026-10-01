@@ -11,6 +11,13 @@
 
 namespace srouter::dns
 {
+// MinGW: minwindef.h IN/OUT macros collide with RRClass::IN
+#ifdef IN
+#undef IN
+#endif
+#ifdef OUT
+#undef OUT
+#endif
     enum class RRClass : uint16_t
     {
         IN = 1,

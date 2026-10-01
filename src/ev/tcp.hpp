@@ -5,7 +5,13 @@
 
 extern "C"
 {
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+// MinGW has no arpa/inet.h; SOCKET/inet helpers live in winsock2/ws2tcpip.
+#else
 #include <arpa/inet.h>
+#endif
     struct bufferevent;
     struct evconnlistener;
 }

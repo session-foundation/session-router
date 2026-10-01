@@ -8,14 +8,6 @@
 
 namespace srouter::win32
 {
-    namespace
-    {
-        template <typename T>
-        std::string ip_to_string(T ip)
-        {
-            return var::visit([](auto&& ip) { return ip.to_string(); }, ip);
-        }
-    }  // namespace
 
     void VPNPlatform::make_route(std::string ip, std::string gw, std::string cmd)
     {
@@ -35,31 +27,82 @@ namespace srouter::win32
     void VPNPlatform::route_via_interface(NetworkInterface& vpn, std::string addr, std::string mask, std::string cmd)
     {
         const auto& info = vpn.interface_info();
-        auto ifaddr = ip_to_string(info[0]);
+        if (info.addrs.empty())
+            throw std::runtime_error{"win32 route_via_interface: interface has no addresses"};
+        auto ifaddr = std::visit([](const auto& a) { return a.ip.to_string(); }, info.addrs[0]);
         // this changes the last 1 to a 0 so that it routes over the interface
         // this is required because windows is idiotic af
         ifaddr.back()--;
         srouter::win32::Exec("route.exe", fmt::format("{} {} MASK {} {} METRIC {}", cmd, addr, mask, ifaddr, m_Metric));
     }
 
-    void VPNPlatform::add_route(quic::Address ip, quic::Address gateway)
+    namespace
+    {
+        std::string ipv4_netmask_dotted(uint8_t mask)
+        {
+            if (mask == 0)
+                return "0.0.0.0";
+            uint32_t m = (mask >= 32) ? 0xFFFFFFFFu : (0xFFFFFFFFu << (32 - mask));
+            return fmt::format("{}.{}.{}.{}", (m >> 24) & 0xff, (m >> 16) & 0xff, (m >> 8) & 0xff, m & 0xff);
+        }
+    }  // namespace
+
+    void VPNPlatform::add_route(ipv4 ip, ipv4 gateway)
     {
         make_route(ip.to_string(), gateway.to_string(), "ADD");
     }
 
-    void VPNPlatform::delete_route(quic::Address ip, quic::Address gateway)
+    void VPNPlatform::add_route(ipv6 ip, ipv6 gateway)
+    {
+        srouter::win32::Exec(
+            "route.exe",
+            fmt::format("-6 ADD {}/128 {} METRIC {}", ip.to_string(), gateway.to_string(), m_Metric));
+    }
+
+    void VPNPlatform::delete_route(ipv4 ip, ipv4 gateway)
     {
         make_route(ip.to_string(), gateway.to_string(), "DELETE");
     }
 
-    void VPNPlatform::add_route_via_interface(NetworkInterface& vpn, IPRange range)
+    void VPNPlatform::delete_route(ipv6 ip, ipv6 gateway)
     {
-        route_via_interface(vpn, range.BaseAddressString(), range.NetmaskString(), "ADD");
+        srouter::win32::Exec(
+            "route.exe",
+            fmt::format("-6 DELETE {}/128 {}", ip.to_string(), gateway.to_string()));
     }
 
-    void VPNPlatform::delete_route_via_interface(NetworkInterface& vpn, IPRange range)
+    void VPNPlatform::add_route_via_interface(NetworkInterface& vpn, ipv4_range range)
     {
-        route_via_interface(vpn, range.BaseAddressString(), range.NetmaskString(), "DELETE");
+        route_via_interface(vpn, range.ip.to_string(), ipv4_netmask_dotted(range.mask), "ADD");
+    }
+
+    void VPNPlatform::add_route_via_interface(NetworkInterface& vpn, ipv6_range range)
+    {
+        const auto& info = vpn.interface_info();
+        srouter::win32::Exec(
+            "netsh.exe",
+            fmt::format(
+                "interface ipv6 add route {}/{} \"{}\"",
+                range.ip.to_string(),
+                range.mask,
+                info.ifname));
+    }
+
+    void VPNPlatform::delete_route_via_interface(NetworkInterface& vpn, ipv4_range range)
+    {
+        route_via_interface(vpn, range.ip.to_string(), ipv4_netmask_dotted(range.mask), "DELETE");
+    }
+
+    void VPNPlatform::delete_route_via_interface(NetworkInterface& vpn, ipv6_range range)
+    {
+        const auto& info = vpn.interface_info();
+        srouter::win32::Exec(
+            "netsh.exe",
+            fmt::format(
+                "interface ipv6 delete route {}/{} \"{}\"",
+                range.ip.to_string(),
+                range.mask,
+                info.ifname));
     }
 
     std::vector<quic::Address> VPNPlatform::get_non_interface_gateways(NetworkInterface& vpn)
@@ -85,7 +128,7 @@ namespace srouter::win32
                 if (addr->Address.lpSockaddr->sa_family != AF_INET && addr->Address.lpSockaddr->sa_family != AF_INET6)
                     continue;
                 quic::Address adapter_addr{addr->Address.lpSockaddr, addr->Address.iSockaddrLength};
-                auto netmask_bits = ipaddr_netmask_bits(addr->OnLinkPrefixLength, addr->Address.lpSockaddr->sa_family);
+                auto netmask_bits = addr->OnLinkPrefixLength;
                 std::variant<ipv4_range, ipv6_range> adapter_range;
                 if (adapter_addr.is_ipv4())
                     adapter_range = adapter_addr.to_ipv4() / netmask_bits;

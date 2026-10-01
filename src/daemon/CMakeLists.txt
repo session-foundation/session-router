@@ -38,7 +38,16 @@ endif()
 # cmake interface library for bunch of cmake hacks to fix final link order
 add_library(hax_and_shims_for_cmake INTERFACE)
 if(WIN32)
-  target_link_libraries(hax_and_shims_for_cmake INTERFACE uvw oxenmq::oxenmq -lws2_32 -lshlwapi -ldbghelp -luser32 -liphlpapi -lpsapi -luserenv)
+  target_link_libraries(hax_and_shims_for_cmake INTERFACE oxenmq::oxenmq "${CMAKE_BINARY_DIR}/static-deps/lib/libzstd.a" -lws2_32 -lshlwapi -ldbghelp -luser32 -liphlpapi -lpsapi -luserenv)
+endif()
+
+if(WIN32)
+  foreach(exe ${exetargets})
+    target_link_libraries(${exe} PRIVATE hax_and_shims_for_cmake)
+    if(TARGET sessiondep::libzstd)
+      target_link_libraries(${exe} PRIVATE sessiondep::libzstd)
+    endif()
+  endforeach()
 endif()
 
 foreach(exe ${exetargets})
@@ -78,3 +87,25 @@ if(SROUTER_STRIP)
 endif()
 
 set_target_properties(${exetargets} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR})
+
+# whole-archive libzstd for MinGW static (ZSTD_* from libsession-router-utils)
+if(WIN32)
+  foreach(exe ${exetargets})
+    target_link_libraries(${exe} PRIVATE
+      "-Wl,--whole-archive"
+      "${CMAKE_BINARY_DIR}/static-deps/lib/libzstd.a"
+      "-Wl,--no-whole-archive")
+    # Refuse ELF / ZSTD_trace libzstd (windows-check-libzstd-coff)
+    add_custom_command(TARGET ${exe} PRE_LINK
+      COMMAND bash "${CMAKE_SOURCE_DIR}/contrib/windows-check-libzstd-coff.sh"
+              "${CMAKE_BINARY_DIR}/static-deps/lib/libzstd.a"
+      VERBATIM)
+  endforeach()
+endif()
+
+# zstd_trace_stubs for MinGW whole-archive (ZSTD_trace_* from libzstd)
+if(WIN32)
+  foreach(exe ${exetargets})
+    target_sources(${exe} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/zstd_trace_stubs.c)
+  endforeach()
+endif()

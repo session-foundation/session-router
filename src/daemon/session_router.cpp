@@ -13,6 +13,10 @@
 #include <session/router_context.hpp>
 
 #include <csignal>
+// MinGW: SIGKILL is not in <csignal>; POSIX value for signal()
+#ifndef SIGKILL
+#define SIGKILL 9
+#endif
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -192,7 +196,7 @@ namespace
             srouter::log::error(logcat, "ChangeServiceConfig2 failed");
         }
         else
-            srouter::log::info(log_cat, "Service description updated successfully.");
+            srouter::log::info(logcat, "Service description updated successfully.");
 
         CloseServiceHandle(schService);
         CloseServiceHandle(schSCManager);
@@ -248,7 +252,7 @@ namespace
                                            | MiniDumpWithUnloadedModules | MiniDumpWithThreadInfo);
 
         const std::string fname =
-            fmt::format("C:\\ProgramData\\Session-Router\\crash-{}.dump", srouter::time_now_ms().count());
+            fmt::format("C:\\ProgramData\\Session-Router\\crash-{}.dump", srouter::time_now_ms().time_since_epoch().count());
 
         HANDLE hDumpFile;
         SYSTEMTIME stLocalTime;

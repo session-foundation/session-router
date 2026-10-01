@@ -30,7 +30,12 @@ endif()
 
 
 if(WIN32)
-  foreach(exe IN ITEMS session-router session-router-vpn session-router-bootstrap)
+  # MinGW/.rc: map project() hyphen vars to underscore names version.rc.in expects.
+  set(session_router_VERSION_MAJOR "${session-router_VERSION_MAJOR}")
+  set(session_router_VERSION_MINOR "${session-router_VERSION_MINOR}")
+  set(session_router_VERSION_PATCH "${session-router_VERSION_PATCH}")
+  set(session_router_VERSION "${session-router_VERSION}")
+  foreach(exe IN ITEMS session-router session-router-cntrl session-router-config)
     set(session_router_EXE_NAME "${exe}.exe")
     configure_file("${CMAKE_CURRENT_SOURCE_DIR}/win32/version.rc.in" "${CMAKE_BINARY_DIR}/${exe}.rc" @ONLY)
     set_property(SOURCE "${CMAKE_BINARY_DIR}/${exe}.rc" PROPERTY GENERATED 1)
@@ -39,7 +44,7 @@ endif()
 
 add_custom_target(genversion_cpp DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/constants/version.cpp")
 if(WIN32)
-  add_custom_target(genversion_rc DEPENDS "${CMAKE_BINARY_DIR}/session_router.rc" "${CMAKE_BINARY_DIR}/session-router-vpn.rc" "${CMAKE_BINARY_DIR}/session-router-bootstrap.rc")
+  add_custom_target(genversion_rc DEPENDS "${CMAKE_BINARY_DIR}/session-router.rc" "${CMAKE_BINARY_DIR}/session-router-cntrl.rc" "${CMAKE_BINARY_DIR}/session-router-config.rc")
 else()
   add_custom_target(genversion_rc)
 endif()

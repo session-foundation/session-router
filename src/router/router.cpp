@@ -612,7 +612,6 @@ namespace srouter
 
     std::string Router::_stats_line(sys_ms now) const
     {
-        using namespace fmt::literals;
         auto [rcs, rids, bs] = _node_db->db_stats();
         auto [s_in, s_out_r, s_out_c, s_out_r_pending, s_out_c_pending] = _session_endpoint->session_stats();
         auto [in_paths, out_r_paths, out_c_paths] = _session_endpoint->path_stats(now);
@@ -623,16 +622,16 @@ namespace srouter
                 "relays: {relays} conns ({rin}↓, {rout}↑{pending}{full_mesh}), RC/RIDs: {rcs}/{rids}; "
                 "{clients} clients; sessions: {sess_in}↓; paths: {paths_in}",
 
-                "relays"_a = relays,
-                "rin"_a = rin,
-                "rout"_a = rout,
-                "pending"_a = rpending ? ", {} pending"_format(rpending) : "",
-                "full_mesh"_a = relays >= rids - 1 ? ", #" : "",
-                "clients"_a = clients,
-                "sess_in"_a = s_in,
-                "paths_in"_a = in_paths,
-                "rcs"_a = rcs,
-                "rids"_a = rids);
+                fmt::arg("relays", relays),
+                fmt::arg("rin", rin),
+                fmt::arg("rout", rout),
+                fmt::arg("pending", rpending ? ", {} pending"_format(rpending) : ""),
+                fmt::arg("full_mesh", relays >= rids - 1 ? ", #" : ""),
+                fmt::arg("clients", clients),
+                fmt::arg("sess_in", s_in),
+                fmt::arg("paths_in", in_paths),
+                fmt::arg("rcs", rcs),
+                fmt::arg("rids", rids));
         }
 
         auto [nconns, npending] = link_endpoint().client_connection_counts();
@@ -641,16 +640,16 @@ namespace srouter
             "paths: {paths_in}↓/{paths_out}↑, {path_percent:.1f}% of {path_total} attempts; "
             "RC/RIDs: {rcs}/{rids}",
 
-            "conns"_a = nconns + npending,
-            "sess_in"_a = s_in,
-            "sess_out_c"_a = s_out_c,
-            "sess_out_r"_a = s_out_r,
-            "paths_in"_a = in_paths,
-            "paths_out"_a = out_r_paths + out_c_paths,
-            "path_percent"_a = (double)path_builds.success * 100.0 / (double)path_builds.attempts,
-            "path_total"_a = path_builds.attempts,
-            "rcs"_a = rcs,
-            "rids"_a = rids);
+            fmt::arg("conns", nconns + npending),
+            fmt::arg("sess_in", s_in),
+            fmt::arg("sess_out_c", s_out_c),
+            fmt::arg("sess_out_r", s_out_r),
+            fmt::arg("paths_in", in_paths),
+            fmt::arg("paths_out", out_r_paths + out_c_paths),
+            fmt::arg("path_percent", (double)path_builds.success * 100.0 / (double)path_builds.attempts),
+            fmt::arg("path_total", path_builds.attempts),
+            fmt::arg("rcs", rcs),
+            fmt::arg("rids", rids));
     }
 
     void Router::report_stats()

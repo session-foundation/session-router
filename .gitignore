@@ -28,6 +28,7 @@ callgrind.*
 *.signed
 !/contrib/bootstrap/mainnet.signed
 !/contrib/bootstrap/testnet.signed
+!.github/packaging/bootstrap.signed
 *.key
 
 shadow.data
@@ -44,6 +45,7 @@ vsproject/
 .vs
 
 *.ini
+!.github/packaging/session-router.ini
 
 
 .gradle/

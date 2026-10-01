@@ -10,6 +10,10 @@
 #include <session/router_context.hpp>
 
 #include <csignal>
+// MinGW: SIGKILL is not in <csignal>; POSIX value for signal() compare
+#ifndef SIGKILL
+#define SIGKILL 9
+#endif
 #include <memory>
 #include <stdexcept>
 

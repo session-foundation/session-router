@@ -13,7 +13,7 @@
 	url = https://github.com/fnc12/sqlite_orm
 [submodule "external/oxen-mq"]
 	path = external/oxen-mq
-	url = https://github.com/session-foundation/liboxenmq.git
+	url = https://github.com/carlcrainellc/liboxenmq.git
 [submodule "gui"]
 	path = gui
 	url = https://github.com/oxen-io/lokinet-gui.git
@@ -22,10 +22,10 @@
 	url = https://github.com/CLIUtils/CLI11.git
 [submodule "external/oxen-libquic"]
 	path = external/oxen-libquic
-	url = https://github.com/session-foundation/libquic.git
+	url = https://github.com/carlcrainellc/libquic.git
 [submodule "external/mlkem-native"]
 	path = external/mlkem-native
 	url = https://github.com/pq-code-package/mlkem-native.git
 [submodule "cmake/session-deps"]
 	path = cmake/session-deps
-	url = https://github.com/session-foundation/session-deps.git
+	url = https://github.com/carlcrainellc/session-deps.git
