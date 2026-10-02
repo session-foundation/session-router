@@ -235,6 +235,13 @@ if (NOT BUILD_STATIC_DEPS)
   option(WITH_SYSTEMD "enable systemd integration for sd_notify" ${SD_FOUND})
 endif()
 
+
+# oxen-mq only links TARGET sodium; session-deps names it sessiondep::libsodium.
+if(NOT TARGET sodium AND TARGET sessiondep::libsodium)
+  add_library(sodium INTERFACE)
+  target_link_libraries(sodium INTERFACE sessiondep::libsodium)
+endif()
+
 add_subdirectory(external)
 
 # interface library for setting common includes, linkage and flags

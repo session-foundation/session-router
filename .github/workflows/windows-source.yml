@@ -1,0 +1,113 @@
+name: windows-source
+
+# MinGW configure and build for the Windows client.
+# Windows runtime fixes live in src/. MinGW dependency fixes are committed on
+# the pinned submodule repos used by this branch.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [windows-source-07e5918]
+
+jobs:
+  mingw:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - name: packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git pkg-config \
+            mingw-w64 nsis automake libtool python3 librsvg2-bin icoutils zip
+          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
+          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
+
+      - name: checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          token: ${{ secrets.SUBMODULES_TOKEN }}
+
+      - name: record SHA
+        run: |
+          echo "SR_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          git rev-parse HEAD
+          git status -sb
+
+      - name: cache MinGW build tree
+        uses: actions/cache@v4
+        with:
+          path: build/win32
+          key: mingw-win32-source-${{ env.SR_SHA }}-${{ hashFiles('src/daemon/CMakeLists.txt', 'cmake/Version.cmake', '.gitmodules') }}
+
+      - name: provide session_router.svg for ico
+        run: |
+          if [ ! -f contrib/session_router.svg ]; then
+            cp -v contrib/lokinet.svg contrib/session_router.svg
+          fi
+
+      - name: configure
+        run: |
+          mkdir -p "$PWD/build/win32"
+          ./contrib/windows-configure.sh "$PWD" "$PWD/build/win32" -DSROUTER_GUI=OFF
+
+      - name: build
+        run: |
+          cmake --build "$PWD/build/win32" --parallel "$(nproc)" --target session-router
+
+      - name: stage artifact
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          cp -v build/win32/session-router.exe artifact/
+
+          # MinGW runtime DLLs (posix sysroot)
+          GCCDLL=$(ls /usr/lib/gcc/x86_64-w64-mingw32/*-posix/libgcc_s_seh-1.dll | head -1)
+          STDCPP=$(ls /usr/lib/gcc/x86_64-w64-mingw32/*-posix/libstdc++-6.dll | head -1)
+          PTHREAD=/usr/x86_64-w64-mingw32/lib/libwinpthread-1.dll
+          cp -v "$GCCDLL" "$STDCPP" "$PTHREAD" artifact/
+
+          # Official Wintun amd64 (must be exactly 427552 bytes)
+          curl -fsSL -o /tmp/wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip
+          python3 -c "
+          import zipfile, pathlib, struct, sys
+          z = zipfile.ZipFile('/tmp/wintun.zip')
+          data = z.read('wintun/bin/amd64/wintun.dll')
+          e = struct.unpack_from('<I', data, 0x3C)[0]
+          mach = struct.unpack_from('<H', data, e + 4)[0]
+          assert mach == 0x8664, hex(mach)
+          assert len(data) == 427552, len(data)
+          pathlib.Path('artifact/wintun.dll').write_bytes(data)
+          print(f'wrote artifact/wintun.dll ({len(data)} bytes, amd64)')
+          "
+
+          # Client ini (Exit off) + bootstrap (packaging assemble inputs)
+          cp -v .github/packaging/session-router.ini artifact/session-router.ini
+          cp -v .github/packaging/bootstrap.signed artifact/bootstrap.signed
+
+          ls -la artifact/
+          x86_64-w64-mingw32-objdump -f artifact/session-router.exe | head -5
+
+          # Hard tests — fail job if any required laptop piece missing/wrong
+          test -f artifact/session-router.exe
+          test -f artifact/libgcc_s_seh-1.dll
+          test -f artifact/libstdc++-6.dll
+          test -f artifact/libwinpthread-1.dll
+          test -f artifact/wintun.dll
+          test "$(wc -c < artifact/wintun.dll)" -eq 427552
+          test -f artifact/session-router.ini
+          test -f artifact/bootstrap.signed
+          test "$(wc -c < artifact/bootstrap.signed)" -eq 434
+          grep -qE '^enable=false$' artifact/session-router.ini
+          grep -qE '^enabled=true$' artifact/session-router.ini
+          grep -q 'ifaddr=10.192.0.1/16' artifact/session-router.ini
+          grep -q 'ifaddr=fd2e:7365:7368::1/64' artifact/session-router.ini
+          echo "stage artifact OK"
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: session-router-windows-source-${{ env.SR_SHA }}
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 14

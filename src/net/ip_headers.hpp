@@ -1,6 +1,18 @@
 #pragma once
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+// MinGW lacks netinet/ip6.h; in6_addr is in ws2tcpip.h.
+// Map glibc-style endian macros to GCC builtins for bitfield layouts.
+#ifndef __BYTE_ORDER
+#define __BYTE_ORDER __BYTE_ORDER__
+#define __LITTLE_ENDIAN __ORDER_LITTLE_ENDIAN__
+#define __BIG_ENDIAN __ORDER_BIG_ENDIAN__
+#endif
+#else
 #include <netinet/ip6.h>
+#endif
 #include <oxenc/endian.h>
 
 namespace srouter

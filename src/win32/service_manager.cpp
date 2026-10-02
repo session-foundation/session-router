@@ -83,7 +83,7 @@ namespace srouter::sys
                 std::chrono::milliseconds{
                     st == ServiceState::Starting       ? StartupTimeout
                         : st == ServiceState::Stopping ? StopTimeout
-                                                       : 0s}
+                                                       : std::chrono::seconds(0)}
                     .count();
             // dwCheckPoint gets incremented during a start/stop to tell windows "we're still
             // starting/stopping" and to reset its must-be-hung timer.  We increment it here so that

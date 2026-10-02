@@ -8,7 +8,12 @@
 
 extern "C"
 {
+#ifdef _WIN32
+#include <winsock2.h>
+// MinGW has no netdb.h; getprotobyname/getprotobynumber are in winsock2.
+#else
 #include <netdb.h>
+#endif
 }
 
 namespace srouter

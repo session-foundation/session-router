@@ -1,6 +1,7 @@
 #include "exception.hpp"
 
 #include "util/str.hpp"
+#include <memory>
 #include "windows.h"
 
 #include <array>

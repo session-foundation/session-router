@@ -35,13 +35,19 @@ namespace srouter::win32
 
         ~VPNPlatform() override = default;
 
-        void add_route(quic::Address ip, quic::Address gateway) override;
+        // Upstream AbstractRouteManager split Address/IPRange into ipv4/ipv6 overloads;
+        // win32.hpp was still on the old quic::Address / IPRange signatures.
+        void add_route(ipv4 ip, ipv4 gateway) override;
+        void add_route(ipv6 ip, ipv6 gateway) override;
 
-        void delete_route(quic::Address ip, quic::Address gateway) override;
+        void delete_route(ipv4 ip, ipv4 gateway) override;
+        void delete_route(ipv6 ip, ipv6 gateway) override;
 
-        void add_route_via_interface(NetworkInterface& vpn, IPRange range) override;
+        void add_route_via_interface(NetworkInterface& vpn, ipv4_range range) override;
+        void add_route_via_interface(NetworkInterface& vpn, ipv6_range range) override;
 
-        void delete_route_via_interface(NetworkInterface& vpn, IPRange range) override;
+        void delete_route_via_interface(NetworkInterface& vpn, ipv4_range range) override;
+        void delete_route_via_interface(NetworkInterface& vpn, ipv6_range range) override;
 
         std::vector<quic::Address> get_non_interface_gateways(NetworkInterface& vpn) override;
 

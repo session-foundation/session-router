@@ -50,7 +50,7 @@ namespace srouter::dns
         if (conf.unbound_hosts)
             if (int ret = ub_ctx_hosts(
                     ctx,
-                    *conf.unbound_hosts == std::filesystem::path{"SYSTEM"} ? nullptr : conf.unbound_hosts->c_str());
+                    *conf.unbound_hosts == std::filesystem::path{"SYSTEM"} ? nullptr : conf.unbound_hosts->string().c_str());
                 ret != 0)
                 throw std::runtime_error{"Failed to register DNS hosts file: {}"_format(ub_strerror(ret))};
 

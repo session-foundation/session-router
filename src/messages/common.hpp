@@ -10,6 +10,25 @@ namespace srouter::messages
     inline constexpr auto STATUS_KEY = "!"sv;
     std::string serialize_status_response(std::string_view value);
 
+// MinGW: winnt.h STATUS_* macros collide with these string-view names
+#ifdef STATUS_OK
+#undef STATUS_OK
+#endif
+#ifdef STATUS_TIMEOUT
+#undef STATUS_TIMEOUT
+#endif
+#ifdef STATUS_ERROR
+#undef STATUS_ERROR
+#endif
+#ifdef STATUS_NOT_FOUND
+#undef STATUS_NOT_FOUND
+#endif
+#ifdef STATUS_EXPIRED
+#undef STATUS_EXPIRED
+#endif
+#ifdef STATUS_FUTURE
+#undef STATUS_FUTURE
+#endif
     constexpr auto STATUS_OK = "OK"sv;
     constexpr auto STATUS_TIMEOUT = "TIMEOUT"sv;
     constexpr auto STATUS_ERROR = "ERROR"sv;

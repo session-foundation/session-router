@@ -20,10 +20,10 @@ namespace srouter::sys
         // How long we tell Windows to give us to startup before assuming we have stalled/hung.  The
         // biggest potential time here is wintun, which if it is going to fail appears to take
         // around 15s before doing so.
-        static constexpr auto StartupTimeout = 17s;
+        static constexpr auto StartupTimeout = std::chrono::seconds(17);
 
         // How long we tell Windows to give us to fully stop before killing us.
-        static constexpr auto StopTimeout = 5s;
+        static constexpr auto StopTimeout = std::chrono::seconds(5);
 
         SVC_Manager();
 

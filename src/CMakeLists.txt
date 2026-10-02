@@ -119,6 +119,11 @@ session_router_add_library(session-router-utils
 
 add_dependencies(session-router-utils genversion)
 
+# mingw: exception.cpp in session-router-utils
+if(WIN32)
+  target_sources(session-router-utils PRIVATE win32/exception.cpp)
+endif()
+
 session_router_add_library(session-router-contact
   contact/client_contact.cpp
   contact/client_intro.cpp
@@ -175,7 +180,6 @@ if (SROUTER_FULL)
       win32/service_manager.cpp
       win32/exec.cpp
       win32/dll.cpp
-      win32/exception.cpp
       win32/wintun.cpp
       win32/windivert.cpp)
     target_include_directories(session-router-platform PRIVATE ${CMAKE_BINARY_DIR}/wintun/include/ ${CMAKE_BINARY_DIR}/WinDivert-${WINDIVERT_VERSION}/include/)

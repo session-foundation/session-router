@@ -17,6 +17,9 @@ extern "C"
 
 #include <map>
 #include <unordered_set>
+#include <span>
+#include <cstring>
+#include <variant>
 
 namespace srouter::win32
 {
@@ -74,11 +77,10 @@ namespace srouter::win32
             DWORD size;
             WINTUN_SESSION_HANDLE session;
             /// copy our data into an ip packet struct
-            net::IPPacket copy() const
+            IPPacket copy() const
             {
-                net::IPPacket pkt{size};
-                std::copy_n(data, size, pkt.data());
-                return pkt;
+                return IPPacket{
+                    std::span<const std::byte>{reinterpret_cast<const std::byte*>(data), static_cast<size_t>(size)}};
             }
 
             ~PacketWrapper() { release_read(session, data); }
@@ -136,24 +138,74 @@ namespace srouter::win32
             void Up(const vpn::InterfaceInfo& info) const
             {
                 const auto luid = GetAdapterLUID();
+                // WintunCreateAdapter can return before the InterfaceLuid is visible to
+                // IP Helper. CreateUnicastIpAddressEntry then returns ERROR_NOT_FOUND
+                // (1168). Retry with short backoff; treat 5010 (already exists) as success.
+                // CreateUnicastIpAddressEntry may mutate the row on failure; restore a
+                // clean copy each attempt so a retry cannot AV on a half-filled struct.
+                // IPv6: byte-stable SOCKADDR_INET fill (MSVC sin6_addr @ +8). Never declare
+                // a named IN6 sockaddr local or write via the Address Ipv6 union member.
+                auto set_unicast_v4 = [](const MIB_UNICASTIPADDRESS_ROW& prototype, const auto& label) {
+                    DWORD err = ERROR_SUCCESS;
+                    for (int attempt = 0; attempt < 50; ++attempt)
+                    {
+                        MIB_UNICASTIPADDRESS_ROW row = prototype;
+                        err = CreateUnicastIpAddressEntry(&row);
+                        if (err == ERROR_SUCCESS || err == 5010)
+                            return;
+                        if (err != ERROR_NOT_FOUND)
+                            break;
+                        Sleep(50);
+                    }
+                    throw win32::error{err, fmt::format("cannot set address '{}'", label)};
+                };
+                auto set_unicast_v6 = [](const MIB_UNICASTIPADDRESS_ROW& prototype, const auto& label) {
+                    DWORD err = ERROR_SUCCESS;
+                    for (int attempt = 0; attempt < 50; ++attempt)
+                    {
+                        MIB_UNICASTIPADDRESS_ROW row = prototype;
+                        err = CreateUnicastIpAddressEntry(&row);
+                        if (err == ERROR_SUCCESS || err == 5010)
+                            return;
+                        if (err != ERROR_NOT_FOUND)
+                            break;
+                        Sleep(50);
+                    }
+                    // If IPv6 address add fails, warn and continue so IPv4 still works.
+                    log::warning(
+                        logcat,
+                        "cannot set IPv6 address '{}' (winerr={}); continuing IPv4-only",
+                        label,
+                        err);
+                };
                 for (const auto& addr : info.addrs)
                 {
-                    // TODO: implement ipv6
-                    if (addr.fam != AF_INET)
-                        continue;
                     MIB_UNICASTIPADDRESS_ROW AddressRow;
                     InitializeUnicastIpAddressEntry(&AddressRow);
                     AddressRow.InterfaceLuid = luid;
-
-                    AddressRow.Address.Ipv4.sin_family = AF_INET;
-                    AddressRow.Address.Ipv4.sin_addr.S_un.S_addr = ToNet(net::TruncateV6(addr.range.addr)).n;
-                    AddressRow.OnLinkPrefixLength = addr.range.HostmaskBits();
                     AddressRow.DadState = IpDadStatePreferred;
 
-                    if (auto err = CreateUnicastIpAddressEntry(&AddressRow); err != ERROR_SUCCESS)
-                        throw win32::error{err, fmt::format("cannot set address '{}'", addr.range)};
+                    if (const auto* n4 = std::get_if<ipv4_net>(&addr))
+                    {
+                        AddressRow.Address.Ipv4.sin_family = AF_INET;
+                        AddressRow.Address.Ipv4.sin_addr = static_cast<in_addr>(n4->ip);
+                        AddressRow.OnLinkPrefixLength = n4->mask;
 
-                    log::debug(logcat, "Added address: {}", addr.range);
+                        set_unicast_v4(AddressRow, n4->to_string());
+                        log::debug(logcat, "Added address: {}", n4->to_string());
+                    }
+                    else if (const auto* n6 = std::get_if<ipv6_net>(&addr))
+                    {
+                        // Byte-stable MSVC SOCKADDR_INET layout: si_family @0, sin6_addr @8.
+                        std::memset(&AddressRow.Address, 0, sizeof(AddressRow.Address));
+                        AddressRow.Address.si_family = AF_INET6;
+                        const in6_addr v6 = static_cast<in6_addr>(n6->ip);
+                        std::memcpy(reinterpret_cast<unsigned char*>(&AddressRow.Address) + 8, &v6, 16);
+                        AddressRow.OnLinkPrefixLength = n6->mask;
+
+                        set_unicast_v6(AddressRow, n6->to_string());
+                        log::debug(logcat, "Added address: {}", n6->to_string());
+                    }
                 }
             }
 
@@ -228,11 +280,11 @@ namespace srouter::win32
 
             /// write an ip packet to the interface, return 2 bools, first is did we write the
             /// packet, second if we are terminating
-            std::pair<bool, bool> WritePacket(net::IPPacket pkt) const
+            std::pair<bool, bool> WritePacket(IPPacket pkt) const
             {
                 if (auto* buf = alloc_write(_impl, pkt.size()))
                 {
-                    std::copy_n(pkt.data(), pkt.size(), buf);
+                    std::memcpy(buf, pkt.data(), pkt.size());
                     send_packet(_impl, buf);
                     return {true, false};
                 }
@@ -251,8 +303,8 @@ namespace srouter::win32
             Router* const _router;
             std::shared_ptr<WintunAdapter> _adapter;
             std::shared_ptr<WintunSession> _session;
-            thread::Queue<net::IPPacket> _recv_queue;
-            thread::Queue<net::IPPacket> _send_queue;
+            thread::Queue<IPPacket> _recv_queue;
+            thread::Queue<IPPacket> _send_queue;
             std::thread _recv_thread;
             std::thread _send_thread;
 
@@ -262,7 +314,7 @@ namespace srouter::win32
             WintunInterface(vpn::InterfaceInfo info, Router* router)
                 : vpn::NetworkInterface{std::move(info)},
                   _router{router},
-                  _adapter{std::make_shared<WintunAdapter>(m_Info.ifname)},
+                  _adapter{std::make_shared<WintunAdapter>(_info.ifname)},
                   _session{std::make_shared<WintunSession>()},
                   _recv_queue{packet_queue_length},
                   _send_queue{packet_queue_length}
@@ -270,9 +322,9 @@ namespace srouter::win32
 
             void Start() override
             {
-                m_Info.index = 0;
+                _info.index = 0;
                 // put the adapter and set addresses
-                _adapter->Up(m_Info);
+                _adapter->Up(_info);
                 // start up io session
                 _session->Start(_adapter);
 
@@ -326,22 +378,25 @@ namespace srouter::win32
                 _adapter.reset();
             }
 
-            net::IPPacket read_next_packet() override
+            IPPacket read_next_packet() override
             {
-                net::IPPacket pkt{};
+                IPPacket pkt{};
                 if (auto maybe_pkt = _recv_queue.tryPopFront())
                     pkt = std::move(*maybe_pkt);
                 return pkt;
             }
 
-            bool WritePacket(net::IPPacket pkt) override
+            bool write_packet(IPPacket pkt) override
             {
                 return _send_queue.tryPushBack(std::move(pkt)) == thread::QueueReturn::Success;
             }
 
             int PollFD() const override { return -1; }
 
-            void MaybeWakeUpperLayers() const override { _router->TriggerPump(); }
+            void MaybeWakeUpperLayers() const override
+            {
+                // Router wake/pump API removed; apple leaves this empty.
+            }
         };
     }  // namespace
 
