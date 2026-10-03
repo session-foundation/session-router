@@ -2,6 +2,7 @@
 
 #include "util/time.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 
@@ -17,8 +18,36 @@ namespace srouter::path
     /// cannot tell how long the path was).
     inline constexpr int BUILD_LENGTH = 8;
 
-    /// Length of each frame of a path build.
+    /// Length of each frame of an unauthenticated path build (bare XChaCha20).
+    /// Relays that do not advertise path-build authentication still use this size, and a new
+    /// relay still accepts it.
     inline constexpr size_t BUILD_FRAME_SIZE = 169;
+
+    /// Length of each frame of an authenticated path build.  The inner record is the same, sealed
+    /// with XChaCha20-Poly1305.  The extra 17 bytes are the 16-byte tag plus one length digit,
+    /// because the ciphertext crosses 100 bytes.
+    inline constexpr size_t BUILD_FRAME_SIZE_MAC = 186;
+
+    /// Lowest relay contact "v" (major, minor, patch) that understands BUILD_FRAME_SIZE_MAC.
+    /// This tree used to write 1.1.0.  It now writes 1.1.1.  A hop is new only when its signed
+    /// "v" is greater than or equal to 1.1.1.  RelayContact::VERSION (the empty-string key) is
+    /// not this value and is not changed.
+    inline constexpr std::array<uint8_t, 3> BUILD_FRAME_MAC_VERSION{{1, 1, 1}};
+
+    inline constexpr bool router_version_at_least(
+        const std::array<uint8_t, 3>& v, const std::array<uint8_t, 3>& min)
+    {
+        if (v[0] != min[0])
+            return v[0] > min[0];
+        if (v[1] != min[1])
+            return v[1] > min[1];
+        return v[2] >= min[2];
+    }
+
+    inline constexpr bool relay_supports_mac_build(const std::array<uint8_t, 3>& v)
+    {
+        return router_version_at_least(v, BUILD_FRAME_MAC_VERSION);
+    }
 
     /// Max base lifetime of paths.  This is the lifetime of outbound paths, and is the maximum
     /// target lifetime of inbound paths.  Inbound paths also have up some random fuzz added to

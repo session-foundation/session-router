@@ -49,6 +49,17 @@ namespace srouter::path
 
         hops.back().terminal_hop = true;
 
+        bool mac = not hop_rcs.empty();
+        for (const auto& rc : hop_rcs)
+        {
+            if (not relay_supports_mac_build(rc.version()))
+            {
+                mac = false;
+                break;
+            }
+        }
+        _build_frame_size = mac ? BUILD_FRAME_SIZE_MAC : BUILD_FRAME_SIZE;
+
         log::trace(logcat, "Path populated with hops: {}", hop_string());
 
         log::debug(logcat, "Path successfully constructed: {}", *this);

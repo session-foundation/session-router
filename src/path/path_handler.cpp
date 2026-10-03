@@ -471,6 +471,12 @@ namespace srouter::path
             bt_pair_bytes(
                 2 /*de*/ + bt_pair_bytes(sizeof(uint32_t)) /*l*/ + bt_pair_bytes(HopID::SIZE) /*r*/
                 + bt_pair_bytes(HopID::SIZE) /*t*/ + bt_pair_bytes(RouterID::SIZE) /*u*/));
+    static_assert(
+        BUILD_FRAME_SIZE_MAC
+        == 2 /*de*/ + bt_pair_bytes(PubKey::SIZE) /*k*/ + bt_pair_bytes(SymmNonce::SIZE) /*n*/ + /*x*/
+            bt_pair_bytes(
+                crypto::TAG_SIZE + 2 /*de*/ + bt_pair_bytes(sizeof(uint32_t)) /*l*/ + bt_pair_bytes(HopID::SIZE) /*r*/
+                + bt_pair_bytes(HopID::SIZE) /*t*/ + bt_pair_bytes(RouterID::SIZE) /*u*/));
 
     std::vector<std::byte> PathHandler::path_build_onion(Path& path)
     {
@@ -481,8 +487,13 @@ namespace srouter::path
         if (not path.set_built())
             throw std::logic_error{"Cannot build a path from a Path object ({}) multiple times!"_format(path)};
 
+        const size_t frame_size = path.build_frame_size();
+        const bool mac = frame_size == BUILD_FRAME_SIZE_MAC;
+        if (frame_size != BUILD_FRAME_SIZE && frame_size != BUILD_FRAME_SIZE_MAC)
+            throw std::logic_error{"Path build frame size is neither 169 nor 186"};
+
         std::vector<std::byte> result;
-        result.resize(BUILD_FRAME_SIZE * BUILD_LENGTH);
+        result.resize(frame_size * BUILD_LENGTH);
         std::span rspan{result};
 
         auto& path_hops = path.hops;
@@ -497,7 +508,7 @@ namespace srouter::path
         {
             // append junk data when our path is shorter than the max path length: path build
             // request must always have exactly BUILD_LENGTH frames
-            random_fill(rspan.last(BUILD_FRAME_SIZE * (BUILD_LENGTH - n_hops)));
+            random_fill(rspan.last(frame_size * (BUILD_LENGTH - n_hops)));
         }
 
         // each hop will be able to read the outer part of its frame and decrypt
@@ -518,7 +529,10 @@ namespace srouter::path
                 - Generate a symmetric nonce for subsequent DH
                 - Derive the shared secret (`hop.shared`) for DH key-exchange using the Ed keypair, hop pubkey, and
                     symmetric nonce
-                - Encrypt the hop info in-place using `hop.shared` and the generated symmetric nonce from DH
+                - Encrypt the hop info using `hop.shared` and the generated symmetric nonce from DH.
+                  A 186-byte frame seals that record with XChaCha20-Poly1305.  A 169-byte frame
+                  uses bare XChaCha20.  The stream that onions the *following* frames is always
+                  bare XChaCha20 under dh_nonce ^ xor_nonce, with no tag.
                 - Generate the XOR nonce by hashing the symmetric key from DH (`hop.shared`) and truncating
 
                 Bt-encoded contents:
@@ -533,7 +547,6 @@ namespace srouter::path
 
                 All of these frames are inserted sequentially into the list and padded with any needed dummy frames
             */
-            // TODO FIXME: poly1305 MAC for path build encryption
             auto& hop = path_hops[i];
 
             std::string hop_payload;
@@ -554,7 +567,13 @@ namespace srouter::path
 
             hop.xor_nonce.assign(crypto::shorthash(hop.shared_secret).first<SymmNonce::SIZE>());
 
-            crypto::xchacha20(as_bspan(hop_payload), hop.shared_secret, dh_nonce);
+            if (mac)
+            {
+                hop_payload.resize(hop_payload.size() + crypto::TAG_SIZE);
+                crypto::xchacha20_poly1305_encrypt_inplace(hop_payload, hop.shared_secret, dh_nonce);
+            }
+            else
+                crypto::xchacha20(as_bspan(hop_payload), hop.shared_secret, dh_nonce);
 
             oxenc::bt_dict_producer btdp;
             btdp.append("k", eph_key.pubkey_span());
@@ -562,15 +581,16 @@ namespace srouter::path
             btdp.append("x", hop_payload);
             auto frame = btdp.view();
 
-            if (frame.size() != BUILD_FRAME_SIZE)
+            if (frame.size() != frame_size)
             {
-                assert(frame.size() == BUILD_FRAME_SIZE);
-                log::critical(logcat, "Internal error: unexpected path build frame size!");
+                assert(frame.size() == frame_size);
+                log::critical(
+                    logcat, "Internal error: unexpected path build frame size {} != {}!", frame.size(), frame_size);
                 throw std::runtime_error{"Internal error: frame size mismatch in path build!"};
             }
 
-            auto mine = rspan.subspan(i * BUILD_FRAME_SIZE, BUILD_FRAME_SIZE);
-            std::memcpy(mine.data(), frame.data(), BUILD_FRAME_SIZE);
+            auto mine = rspan.subspan(i * frame_size, frame_size);
+            std::memcpy(mine.data(), frame.data(), frame_size);
 
             if (auto following_frames = n_hops - 1 - i; following_frames > 0)
                 // We only onion the real frames that follow this one, not the junk frames, because
@@ -579,26 +599,35 @@ namespace srouter::path
                 // frames begin (because of frame rotation), which also has a nice side effect of
                 // scrambling the junk frames so that junk values don't link path builds.  (This
                 // also means the junk recovered isn't the same junk we produced, but that's fine).
+                // This onion is bare XChaCha20.  It is not the same nonce as this hop's own record,
+                // and it is not tagged.
                 crypto::xchacha20(
-                    rspan.subspan((i + 1) * BUILD_FRAME_SIZE, following_frames * BUILD_FRAME_SIZE),
+                    rspan.subspan((i + 1) * frame_size, following_frames * frame_size),
                     hop.shared_secret,
                     dh_nonce ^ hop.xor_nonce);
         }
 
         router.path_builds.attempts++;
 
+        log::debug(logcat, "Path build encoded as {} x {}-byte frames", BUILD_LENGTH, frame_size);
+
         return result;
     }
 
     // Constructs a TransitHop from a serialized path build frame, i.e. undoing one layer of the
     // path build onioning, above.  Returns the constructed TransitHop and the dh_nonce for the path
-    // build.
+    // build.  `frame` is one frame: 169 (bare) or 186 (tagged).  A bad tag on a 186-byte frame
+    // throws INVALID_PAYLOAD before the lifetime, hop ids, or upstream are read.
     std::pair<std::shared_ptr<path::TransitHop>, SymmNonce> PathHandler::decrypt_build_frame(
-        std::span<const std::byte, path::BUILD_FRAME_SIZE> frame,
+        std::span<const std::byte> frame,
         const Router& r,
         const std::variant<RouterID, quic::ConnectionID>& src,
         sys_ms now)
     {
+        const bool mac = frame.size() == path::BUILD_FRAME_SIZE_MAC;
+        if (not mac && frame.size() != path::BUILD_FRAME_SIZE)
+            throw path::TransitHopError::INVALID_DATA();
+
         std::pair<std::shared_ptr<path::TransitHop>, SymmNonce> ret;
         auto& [hop_ptr, dh_nonce] = ret;
         auto& hop = *(hop_ptr = std::make_shared<path::TransitHop>());
@@ -628,7 +657,16 @@ namespace srouter::path
             throw path::TransitHopError::DH_PUBKEY();
         }
 
-        crypto::xchacha20(payload, hop.shared_secret, dh_nonce);
+        if (mac)
+        {
+            auto plain = crypto::xchacha20_poly1305_decrypt(payload, hop.shared_secret, dh_nonce);
+            if (not plain)
+                throw path::TransitHopError::INVALID_PAYLOAD();
+            payload = std::move(*plain);
+        }
+        else
+            crypto::xchacha20(payload, hop.shared_secret, dh_nonce);
+
         hop.xor_nonce.assign(crypto::shorthash(hop.shared_secret).first<SymmNonce::SIZE>());
 
         try
@@ -644,6 +682,10 @@ namespace srouter::path
             hop.rxid.assign(inner.require_span<std::byte, HopID::SIZE>("r"));
             hop.txid.assign(inner.require_span<std::byte, HopID::SIZE>("t"));
             hop.upstream.assign(inner.require_span<std::byte, RouterID::SIZE>("u"));
+        }
+        catch (const path::TransitHopError&)
+        {
+            throw;
         }
         catch (const std::exception& e)
         {

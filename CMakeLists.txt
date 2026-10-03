@@ -45,14 +45,14 @@ endif()
 
 
 project(session-router
-    VERSION 1.1.0
+    VERSION 1.1.1
     DESCRIPTION "Session Router - IP packet onion router"
     LANGUAGES ${LANGS})
 
 if(APPLE)
     # Apple build number: must be incremented to submit a new build for the same session-router version,
     # should be reset to 0 when the session-router version increments.
-    set(SROUTER_APPLE_BUILD 5)
+    set(SROUTER_APPLE_BUILD 0)
 endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")

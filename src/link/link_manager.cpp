@@ -675,21 +675,28 @@ namespace srouter::link
         {
             auto frames_in = m.body<std::byte>();
 
-            if (frames_in.size() != path::BUILD_LENGTH * path::BUILD_FRAME_SIZE)
+            size_t stride = 0;
+            if (frames_in.size() == path::BUILD_LENGTH * path::BUILD_FRAME_SIZE)
+                stride = path::BUILD_FRAME_SIZE;
+            else if (frames_in.size() == path::BUILD_LENGTH * path::BUILD_FRAME_SIZE_MAC)
+                stride = path::BUILD_FRAME_SIZE_MAC;
+            else
             {
                 log::info(
                     logcat,
-                    "Ignoring path build with invalid length {} != expected {}*{}",
+                    "Ignoring path build with invalid length {} (expected {}*{} or {}*{})",
                     frames_in.size(),
                     path::BUILD_LENGTH,
-                    path::BUILD_FRAME_SIZE);
+                    path::BUILD_FRAME_SIZE,
+                    path::BUILD_LENGTH,
+                    path::BUILD_FRAME_SIZE_MAC);
                 m.respond(messages::serialize_status_response("BAD FRAMES"sv), true);
                 return;
             }
 
             auto now = srouter::time_now_ms();
             auto [hop, dh_nonce] =
-                path::PathHandler::decrypt_build_frame(frames_in.first<path::BUILD_FRAME_SIZE>(), router, from, now);
+                path::PathHandler::decrypt_build_frame(frames_in.first(stride), router, from, now);
 
             if (hop->expiry > now + path::MAX_LIFETIME_ACCEPTED || hop->expiry <= now)
                 throw path::TransitHopError::INVALID_LIFETIME();
@@ -708,14 +715,14 @@ namespace srouter::link
             // rotate remaining frames forward
             std::vector<std::byte> frames;
             frames.resize(frames_in.size());
-            std::memcpy(
-                frames.data(), frames_in.data() + path::BUILD_FRAME_SIZE, frames_in.size() - path::BUILD_FRAME_SIZE);
+            std::memcpy(frames.data(), frames_in.data() + stride, frames_in.size() - stride);
             // and then fill the frame at the end (where ours would rotate to) with random junk:
-            random_fill(std::span{frames}.last(path::BUILD_FRAME_SIZE));
+            random_fill(std::span{frames}.last(stride));
 
-            // De-onion the remaining frames (not including the known junk frame at the end) for the next hop
+            // De-onion the remaining frames (not including the known junk frame at the end) for the next hop.
+            // Bare XChaCha20, same nonce rule as the sender.  No tag on these following frames.
             crypto::xchacha20(
-                std::span{frames}.first((path::BUILD_LENGTH - 1) * path::BUILD_FRAME_SIZE),
+                std::span{frames}.first((path::BUILD_LENGTH - 1) * stride),
                 hop->shared_secret,
                 dh_nonce ^ hop->xor_nonce);
 

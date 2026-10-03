@@ -11,6 +11,7 @@
 #include <chrono>
 #include <memory>
 #include <ranges>
+#include <span>
 #include <unordered_map>
 
 namespace srouter
@@ -230,7 +231,7 @@ namespace srouter
             // actually called from link_manager.cpp, but is here to be alongside the
             // path_build_onion that builds the frames.
             static std::pair<std::shared_ptr<path::TransitHop>, SymmNonce> decrypt_build_frame(
-                std::span<const std::byte, path::BUILD_FRAME_SIZE> frame,
+                std::span<const std::byte> frame,
                 const Router& r,
                 const std::variant<RouterID, quic::ConnectionID>& src,
                 sys_ms now);

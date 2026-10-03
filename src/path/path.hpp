@@ -99,6 +99,10 @@ namespace srouter::path
 
         size_t num_hops() const { return hops.size(); }
 
+        // Frame size chosen for this path's build.  186 only when every hop contact "v" is
+        // >= BUILD_FRAME_MAC_VERSION.  Otherwise 169 for the whole path.  One path is one size.
+        size_t build_frame_size() const { return _build_frame_size; }
+
         const sys_ms& expiry() const { return _expiry; }
 
         std::chrono::milliseconds expires_in(sys_ms now = srouter::time_now_ms()) const { return _expiry - now; }
@@ -217,6 +221,7 @@ namespace srouter::path
         bool _is_built{false};
         bool _is_established{false};
         bool _is_dead{false};
+        size_t _build_frame_size{BUILD_FRAME_SIZE};
 
         Router& _router;
 
