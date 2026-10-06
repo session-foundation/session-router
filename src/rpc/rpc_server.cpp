@@ -1,13 +1,11 @@
 #include "rpc_server.hpp"
 
 #include "config/config.hpp"
-#include "config/ini.hpp"
 #include "constants/version.hpp"
 #include "contact/client_contact.hpp"
 #include "router/router.hpp"
 #include "rpc/rpc_request_definitions.hpp"
 #include "rpc_request.hpp"
-#include "util/logging/buffer.hpp"
 
 #include <nlohmann/json.hpp>
 #include <oxenc/base32z.h>
@@ -125,7 +123,7 @@ namespace srouter::rpc
             return;
         }
 
-        _router.loop.call_soon([&]() { _router.stop(); });
+        _router._jq->call_soon([&]() { _router.stop(); });
 
         SetJSONResponse("OK", halt.response);
     }
@@ -324,7 +322,7 @@ namespace srouter::rpc
             return;
         }
 
-        _router.loop.call([this, netaddr = *maybe_netaddr, replier = findcc.move()]() mutable {
+        _router._jq->call([this, netaddr = *maybe_netaddr, replier = findcc.move()]() mutable {
             _router.session_endpoint().lookup_client_intro(
                 netaddr.pubkey, [&replier](std::optional<srouter::ClientContact> cc) {
                     nlohmann::json result;
@@ -368,7 +366,7 @@ namespace srouter::rpc
             return;
         }
 
-        _router.loop.call([this, netaddr = *maybe_netaddr]() {
+        _router._jq->call([this, netaddr = *maybe_netaddr]() {
             try
             {
                 log::debug(logcat, "Beginning session init to remote instance: {}", netaddr);
@@ -412,7 +410,7 @@ namespace srouter::rpc
 
         auto& netaddr = *maybe_netaddr;
 
-        _router.loop.call([&]() {
+        _router._jq->call([&]() {
             try
             {
                 if (auto session = _router.session_endpoint().get_session(netaddr))

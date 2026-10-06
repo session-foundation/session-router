@@ -27,5 +27,6 @@ namespace srouter
     extern CSRNG csrng;
 
     inline void random_fill(std::span<std::byte> s) { randombytes_buf(s.data(), s.size()); }
+    inline void random_fill(std::span<unsigned char> s) { randombytes_buf(s.data(), s.size()); }
 
 }  // namespace srouter

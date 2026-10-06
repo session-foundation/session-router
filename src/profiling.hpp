@@ -5,6 +5,8 @@
 #include "util/thread/threading.hpp"
 #include "util/time.hpp"
 
+#include <oxen/quic/timer_id.hpp>
+
 #include <filesystem>
 #include <map>
 
@@ -16,7 +18,7 @@ namespace oxenc
 
 namespace oxen::quic
 {
-    struct Ticker;
+    class JobQueue;
 }
 
 namespace srouter
@@ -111,15 +113,18 @@ namespace srouter
         bool is_enabled() const;
 
       private:
-        void start_save_ticker(Router& r);
+        void start_save_timer(Router& r);
 
-        void stop_save_ticker();
+        void stop_save_timer();
 
         std::string BEncode() const;
 
         void BDecode(oxenc::bt_dict_consumer&& dict);
 
-        std::shared_ptr<oxen::quic::Ticker> _disk_saver;
+        // The timer belongs to the queue it was registered on, so we have to remember which one
+        // that was in order to take it off again.
+        oxen::quic::JobQueue* _disk_jq{nullptr};
+        oxen::quic::TimerID _disk_saver;
 
         mutable util::Mutex _m;
         std::filesystem::path _profile_file;

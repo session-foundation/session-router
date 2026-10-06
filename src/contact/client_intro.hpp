@@ -1,7 +1,6 @@
 #pragma once
 
 #include "contact/router_id.hpp"
-#include "crypto/types.hpp"
 #include "path/hopid.hpp"
 #include "util/time.hpp"
 
