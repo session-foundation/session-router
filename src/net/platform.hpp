@@ -55,4 +55,9 @@ namespace srouter::net
         virtual std::optional<int> get_interface_index(ipv6 ip) const = 0;
     };
 
+    // Settable pointer to the platform's native net::Platform singleton, installed by the full
+    // library (srouter::full::initialize) to Platform::Default_ptr().  Null in embedded/core-only
+    // builds; core only dereferences net() on the non-embedded path.
+    inline const Platform* native_net_platform = nullptr;
+
 }  // namespace srouter::net

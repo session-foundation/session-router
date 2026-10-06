@@ -19,6 +19,7 @@ namespace srouter::dns
     {
         A = 1,
         CNAME = 5,
+        SOA = 6,
         PTR = 12,
         TXT = 16,
         AAAA = 28,
@@ -119,6 +120,36 @@ namespace srouter::dns
         RR_TXT(std::string rr_name, std::chrono::seconds ttl, std::string_view value);
         RRType rr_type() const override { return RRType::TXT; }
     };
+    struct RR_SOA : RR_bytes
+    {
+        // SOA records consist of:
+        // - MNAME -- "master name server", a DNS name (e.g. localhost.sesh).  We don't require a
+        //   trailing .
+        // - RNAME -- "responsible party", an e-mail address (but with @ replaced with a .) back in
+        //   1987's naïve version of the internet, and basically always ignored even back then.  We
+        //   don't require a trailing .
+        // - SERIAL -- should change whenever records change.  In SR we just increment it on every
+        //   request.
+        // - MINIMUM -- the TTL for NXDOMAIN and NODATA responses, i.e. the negative caching TTL for
+        //   caching DNS servers that get this record.
+        // - REFRESH/RETRY/EXPIRY -- how often (in seconds) secondary DNS should wait to
+        //   refresh/retry after error/expire data received from the primary.  In SR context these
+        //   values are fairly meaningless and are unlikely to be used by anything.
+        //
+        // (MINIMUM comes after REFRESH/RETRY/EXPIRY in the actual record, but we want to default
+        // them and so rearrange constructor arguments).
+        RR_SOA(
+            std::string rr_name,
+            std::chrono::seconds ttl,
+            std::string_view mname,
+            std::string_view rname,
+            uint32_t serial,
+            std::chrono::seconds minimum,
+            std::chrono::seconds refresh = 1h,
+            std::chrono::seconds retry = 15min,
+            std::chrono::seconds expire = 14 * 24h);
+        RRType rr_type() const override { return RRType::SOA; }
+    };
 
     // Base class for RR types that have a single target name as the value, such as CNAME and PTR
     struct RR_target : ResourceRecord
@@ -135,7 +166,7 @@ namespace srouter::dns
     struct RR_PTR : RR_target
     {
         using RR_target::RR_target;
-        RRType rr_type() const override { return RRType::A; }
+        RRType rr_type() const override { return RRType::PTR; }
     };
     struct RR_CNAME : RR_target
     {

@@ -24,21 +24,22 @@ namespace srouter::rpc
         _is_updating_list = false;
     }
 
-    void OxendRPC::connect_async(oxenmq::address url)
+    void OxendRPC::connect_async(std::string url)
     {
         if (not _router.is_service_node)
         {
             throw std::runtime_error("we cannot talk to oxend while not a service node");
         }
 
-        log::info(logcat, "RPC client connecting to oxend at {}", url.full_address());
+        oxenmq::address addr{url};
+        log::info(logcat, "RPC client connecting to oxend at {}", addr.full_address());
 
         _conn = _omq.connect_remote(
-            url,
+            addr,
             [](oxenmq::ConnectionID) {},
-            [this, url](oxenmq::ConnectionID, std::string_view f) {
+            [this, url = std::move(url)](oxenmq::ConnectionID, std::string_view f) {
                 log::info(logcat, "Failed to connect to oxend at {}", f);
-                _router.loop.call([this, url]() { connect_async(url); });
+                _router._jq->call([this, url]() { connect_async(url); });
             });
     }
 
@@ -178,9 +179,9 @@ namespace srouter::rpc
     {
         log::trace(logcat, "{} called", __PRETTY_FUNCTION__);
 
-        log::info(logcat, "Starting OxendRPC ping ticker...");
+        log::info(logcat, "Starting OxendRPC ping timer...");
         ping();
-        _ping_ticker = _router.loop.call_every(PING_INTERVAL, [this] { ping(); });
+        _ping_timer = _router._jq->add_timer(PING_INTERVAL, [this] { ping(); });
     }
 
     void OxendRPC::handle_new_service_node_list(const nlohmann::json& j)
@@ -235,7 +236,7 @@ namespace srouter::rpc
 
     void OxendRPC::inform_connection(RouterID router, bool success)
     {
-        _router.loop.call([router, success, this]() {
+        _router._jq->call([router, success, this]() {
             const nlohmann::json req = {{"passed", success}, {"pubkey", router.ToHex()}, {"type", "srouter"}};
             request(
                 "admin.report_peer_status",
@@ -315,7 +316,7 @@ namespace srouter::rpc
                         result.reset();
                     }
                 }
-                _router.loop.call(
+                _router._jq->call(
                     [resultHandler, result = std::move(result)]() mutable { resultHandler(std::move(result)); });
             },
             std::move(req).str());

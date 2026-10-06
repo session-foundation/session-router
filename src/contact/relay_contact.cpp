@@ -94,13 +94,13 @@ namespace srouter
 
         btdc.require_signature(
             "~", [this, accept_expired](std::span<const std::byte> msg, std::span<const std::byte> sig) {
-                if (sig.size() != 64)
+                if (sig.size() != Signature::SIZE)
                     throw std::runtime_error{"Invalid signature: not 64 bytes"};
 
                 if (!accept_expired and is_expired(time_now_ms()))
                     throw std::runtime_error{"Rejecting expired relay contact!"};
 
-                if (not crypto::verify(router_id(), msg, sig.first<64>()))
+                if (not router_id().verify(msg, SignatureView{sig.first<Signature::SIZE>()}))
                     throw std::runtime_error{"Failed to verify relay contact signature"};
             });
 
@@ -215,11 +215,7 @@ namespace srouter
         static_assert(srouter::VERSION.size() == 3);
         btdp.append("v", std::span{_router_version});
 
-        btdp.append_signature("~", [&router](std::span<const std::byte> to_sign) {
-            std::array<std::byte, SIGSIZE> sig;
-            router.secret_key().sign(sig, to_sign);
-            return sig;
-        });
+        btdp.append_signature("~", [&router](std::span<const std::byte> m) { return router.secret_key().sign(m); });
         _payload = std::move(btdp).str();
 
         if (_payload.size() > MAX_RC_SIZE)

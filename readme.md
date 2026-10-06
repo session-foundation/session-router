@@ -12,7 +12,7 @@ Session Router is a major component of communications for current and upcoming f
 
 #### You can learn more about the high level, how to use it and the internals of the protocol [here](docs/readme.md)
 
-[![Build Status](https://ci.oxen.rocks/api/badges/oxen-io/session_router/status.svg?ref=refs/heads/dev)](https://ci.oxen.rocks/oxen-io/session_router)
+[![Build Status](https://ci.oxen.rocks/api/badges/session-foundation/session-router/status.svg?ref=refs/heads/dev)](https://ci.oxen.rocks/session-foundation/session-router)
 
 # License
 

@@ -3,6 +3,9 @@
 #include "contact/relay_contact.hpp"
 #include "contact/router_id.hpp"
 #include "util/thread/threading.hpp"
+#include "util/time.hpp"
+
+#include <oxen/quic/timer_id.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -14,8 +17,6 @@
 namespace oxen::quic
 {
     struct message;
-    struct Ticker;
-    class Wakeable;
 }  // namespace oxen::quic
 
 namespace srouter
@@ -23,6 +24,10 @@ namespace srouter
     class Router;
 
     inline constexpr auto FETCH_INTERVAL{5min};
+
+    // Used instead of FETCH_INTERVAL when a fetch round could not settle anything, so that a
+    // client with flaky paths retries promptly rather than sitting on stale RouterIDs.
+    inline constexpr auto FETCH_RETRY_INTERVAL{30s};
     inline constexpr auto PURGE_INTERVAL{5min};
 
     // fallback to bootstrap if we have less than this many RCs
@@ -96,21 +101,19 @@ namespace srouter
         std::filesystem::path get_path_by_pubkey(
             const RouterID& pk, const std::filesystem::path& extension = RC_FILE_EXT) const;
 
-        std::shared_ptr<quic::Ticker> _rid_fetch_ticker;
-
-        std::shared_ptr<quic::Ticker> _purge_ticker;
+        quic::TimerID _purge_timer;
 
         std::unordered_map<RouterID, std::list<std::pair<std::vector<unsigned char>, std::chrono::sys_seconds>>>
             _0rtt_tickets;
         std::unordered_set<RouterID> _0rtt_dirty;
         std::mutex _0rtt_mutex;
-        std::shared_ptr<quic::Wakeable> _0rtt_saver;
+        quic::TimerID _0rtt_saver;
         void _0rtt_save();
 
       public:
         explicit NodeDB(Router& r);
 
-        // Starts the nodedb tickers for purge and fetch (clients), and initiates a bootstrap if the
+        // Starts the nodedb timers for purge and fetch (clients), and initiates a bootstrap if the
         // nodedb has too few RCs.
         void start();
 
@@ -192,32 +195,36 @@ namespace srouter
         std::vector<const RelayContact*> get_n_random_edge_rcs(
             int n, bool shuffle = true, const std::function<bool(const RelayContact&)>& predicate = nullptr) const;
 
-        /// Stores an RC broadcast to the network.  The return value indicates whether this RC
-        /// should be re-broadcast to all connected relays (true) or not (false).  In particular,
-        /// false does *not* necessarily mean that the RC was not updated, but could also simply
-        /// mean that the RC update was not significant enough to warrant rebroadcasting.
+        /// Stores an RC broadcast to the network.  Returns a pair of {stored, gossip}: the first
+        /// indicates whether we stored the RC, the second whether it should be re-broadcast to all
+        /// connected relays.  Note that these are separate questions: we store mundane updates
+        /// without gossipping them, and only a relay has any use for the gossip half at all.
         ///
         /// This function does *not* check that the RC's router ID is actually a valid service node:
         /// call `verify_store_gossip_rc` instead of this to also do that check.
         ///
-        /// In particular, RC re-gossipping is determined by:
+        /// An RC is not stored at all if the currently stored RC for the relay is not at least a
+        /// minute older than the incoming one.
+        ///
+        /// Otherwise, RC re-gossipping is determined by:
         /// - The RC must be for a relay we haven't recently received an RC for (i.e. we didn't have
         ///   it, or what we had was declared outdated (more than 12h old)).
-        /// - Alternatively, an RC will also be gossipped if it is an important update for
-        ///   reachability (i.e. changed IP or port, or other crucial RC properties).
-        /// - Gossips will not be accepted if the currently stored RC for the relay is not at least
-        ///   a minute older than the incoming one.
+        /// - Alternatively, an RC will also be gossipped if it is a significant change: that is, if
+        ///   anything identifying the relay changed (IP, port, version, ...), as opposed to a
+        ///   mundane update that only re-signs the same contents with a fresh timestamp.
         ///
-        /// If storing *our own* RC then this returns true if it was stored, false otherwise,
-        /// because we always want to gossip to our peers when we update our own RC.
-        bool put_rc(RelayContact rc);
+        /// If storing *our own* RC then gossip is true whenever it was stored, because we always
+        /// want to gossip to our peers when we update our own RC.
+        ///
+        /// On a client gossip is always false: rebroadcasting RCs is a relay's job.
+        std::pair<bool, bool> put_rc(RelayContact rc);
 
         /// Checks of the relay in the given rc is a registered remote network relay (either active
         /// or decommissioned, and not ourself) and, if so, calls and returns put_rc with it.
         ///
-        /// Returns true if the router ID is known *and* the rc was updated *and* the RC should be
-        /// re-gossipped (see put_rc); returns false otherwise.
-        bool verify_store_gossip_rc(RelayContact rc);
+        /// Returns {false, false} if the router ID is not a known remote relay, otherwise returns
+        /// put_rc's {stored, gossip} pair.
+        std::pair<bool, bool> verify_store_gossip_rc(RelayContact rc);
 
         /// Stores a 0rtt ticket received from a relay.  This is both written to disk and stored in
         /// memory so that it can reused quickly in the current session, or after restarting.  (NB:
@@ -229,8 +236,16 @@ namespace srouter
         /// does not have to be called from the router loop.
         [[nodiscard]] std::optional<std::vector<unsigned char>> extract_0rtt(const RouterID& rid);
 
+        /// Looks up an RC by RouterID.  If found locally, calls `func` immediately with the RC.
+        /// If the initial bulk RC fetch has not yet completed (i.e. during startup), the lookup
+        /// is queued and retried once RCs are available.  Otherwise returns nullopt.
+        void lookup_rc(const RouterID& rid, std::function<void(std::optional<RelayContact>)> func);
+
       private:
-        void fetch_rcs();
+        sys_ms _last_rc_fetch{};
+        std::vector<std::pair<RouterID, std::function<void(std::optional<RelayContact>)>>> _pending_rc_lookups;
+
+        void fetch_rcs(std::function<void(bool success)> on_done = nullptr);
         void fetch_rids();
 
         /// Initiate a bootstrap fetch attempt.  This will try to bootstrap once from each
@@ -249,7 +264,12 @@ namespace srouter
         /// remove any stored RCs matching the given predicate
         void remove_rcs_if(const std::function<bool(const RelayContact&)>& remove);
 
-        void handle_fetched_router_ids(const std::unordered_map<RouterID, std::unordered_set<RouterID>>& results);
+        // Applies a completed round of RID fetches.  Returns false if the round produced no
+        // consensus, whether from disagreement or from sources that did not answer, in which case
+        // what we already know is left alone.
+        bool handle_fetched_router_ids(
+            const std::unordered_map<RouterID, std::unordered_set<RouterID>>& results,
+            const std::unordered_set<RouterID>& inbound_sources);
 
         // Called on the disk thread to store/update/erase 0rtt tickets for a router id.
         void save_0rtt(const RouterID& rid);

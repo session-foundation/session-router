@@ -5,6 +5,7 @@
 #include "util/bspan.hpp"
 #include "util/logging.hpp"
 #include "util/logging/buffer.hpp"
+#include "util/underlying.hpp"
 
 #include <oxenc/bt_producer.h>
 #include <oxenc/bt_serialize.h>
@@ -68,16 +69,6 @@ namespace srouter
         log::debug(logcat, "ClientContact updated with {} ClientIntros", _intros.size());
     }
 
-#ifdef __cpp_lib_to_underlying
-    using std::to_underlying;
-#else
-    template <class Enum>
-    constexpr std::underlying_type_t<Enum> to_underlying(Enum e) noexcept
-    {
-        return static_cast<std::underlying_type_t<Enum>>(e);
-    }
-#endif
-
     std::vector<std::byte> ClientContact::bt_encode() const
     {
         oxenc::bt_dict_producer btdp;
@@ -128,7 +119,7 @@ namespace srouter
     {
         auto nonce = SymmNonce::make_random();
         auto encrypted = bt_encode();
-        crypto::xchacha20(encrypted, SharedSecret{_pubkey}, nonce);
+        crypto::xchacha20(encrypted, SymmKey{_pubkey}, nonce);
         _signed_at = srouter::time_now_ms();
 
         /** Encrypted client contact values:
@@ -143,7 +134,7 @@ namespace srouter
         btdp.append("n", nonce.to_view());
         btdp.append("t", _signed_at.time_since_epoch().count());
         btdp.append("x", std::span{encrypted});
-        btdp.append_signature("~", [&blinded](std::span<const std::byte> to_sign) { return blinded.sign(to_sign); });
+        btdp.append_signature("~", [&blinded](std::span<const std::byte> m) { return blinded.sign(m); });
 
         return std::move(btdp).str();
     }
@@ -161,15 +152,15 @@ namespace srouter
             auto enc = btdc.require_span<std::byte>("x");
 
             btdc.require_signature("~", [&blinded](std::span<const std::byte> m, std::span<const std::byte> s) {
-                if (s.size() != 64)
+                if (s.size() != Signature::SIZE)
                     throw std::runtime_error{"Invalid signature: not 64 bytes"};
 
-                if (not crypto::verify(blinded, m, s.first<64>()))
+                if (not blinded.verify(m, SignatureView{s.first<Signature::SIZE>()}))
                     throw std::runtime_error{"Encrypted client contact signature verification failed"};
             });
 
             std::vector<std::byte> decrypted{enc.begin(), enc.end()};
-            crypto::xchacha20(decrypted, SharedSecret{root}, nonce);
+            crypto::xchacha20(decrypted, SymmKey{root}, nonce);
 
             return ClientContact{decrypted, signed_at};
         }

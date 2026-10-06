@@ -4,6 +4,7 @@
 #include <oxenc/base32z.h>
 #include <oxenc/endian.h>
 
+#include <chrono>
 #include <span>
 #include <variant>
 #ifndef _WIN32
@@ -39,12 +40,32 @@ namespace srouter::handlers
 
         _if_name = net_conf._if_name.value_or("");
 
-        // These should have been assigned by Router before this:
+        // These should have been assigned by Router before this; they might, however, still be
+        // quad-0 or :: to indicate autoselection of an unused range.
         assert(net_conf._local_ip_net);
         assert(net_conf._local_ipv6_net);
 
-        _local_net = *net_conf._local_ip_net;
-        _local_ipv6_net = *net_conf._local_ipv6_net;
+        vpn::InterfaceInfo info;
+        info.ifname = _if_name;
+        info.addrs.emplace_back(*net_conf._local_ip_net);
+        info.addrs.emplace_back(*net_conf._local_ipv6_net);
+
+        log::debug(logcat, "{} setting up network...", name());
+
+        _net_if = router().vpn_platform()->create_interface(std::move(info), &_router);
+        _if_name = _net_if->interface_info().ifname;
+
+        log::info(logcat, "{} got network interface:{}", name(), _if_name);
+
+        // Load the addresses out of the interface, *not* the config, because the interface
+        // construction will have done auto-selection for any 0 addresses:
+        for (auto& addr : _net_if->interface_info().addrs)
+        {
+            if (auto* n4 = std::get_if<ipv4_net>(&addr))
+                _local_net = *n4;
+            else
+                _local_ipv6_net = std::get<ipv6_net>(addr);
+        }
 
 #if 0
         if (net_conf.addr_map_persist_file)
@@ -92,21 +113,6 @@ namespace srouter::handlers
         log::debug(logcat, "Tun constructing IPRange iterator on local networks: {}, {}", _local_net, _local_ipv6_net);
         _local_range_iterator = IPRangeIterator{_local_net};
         _local_ipv6_range_iterator = IPv6RangeIterator{_local_ipv6_net};
-
-        vpn::InterfaceInfo info;
-        info.ifname = _if_name;
-        info.addrs.emplace_back(_local_net);
-        info.addrs.emplace_back(_local_ipv6_net);
-
-        log::debug(logcat, "{} setting up network...", name());
-
-        log::info(logcat, "{} using IPv4 address range {}", name(), _local_net);
-        log::info(logcat, "{} using IPv6 address range {}", name(), _local_ipv6_net);
-
-        _net_if = router().vpn_platform()->create_interface(std::move(info), &_router);
-        _if_name = _net_if->interface_info().ifname;
-
-        log::info(logcat, "{} got network interface:{}", name(), _if_name);
     }
 
     static const auto random_snode = "random.{}"_format(RELAY_TLD);
@@ -221,14 +227,17 @@ namespace srouter::handlers
         }
 
         assert(_local_ipv6_net.contains(*to_try));
-        if (!_local_ipv6_mapping.contains(*to_try) && *to_try != _local_ipv6_net.ip)
+        // A pubkey with a zero prefix maps onto the base address of the range, which is the
+        // subnet-router anycast address and so must never be handed out as a host address.
+        if (!_local_ipv6_mapping.contains(*to_try) && *to_try != _local_ipv6_net.ip
+            && *to_try != _local_ipv6_net.ip.to_base(_local_ipv6_net.mask))
         {
             log::debug(logcat, "Assigning pubkey-based local IPv6 {} for remote {}", *to_try, a);
             return to_try;
         }
         log::debug(
             logcat,
-            "Pubkey-based local IPv6 {} is already mapped; falling back to sequential IPv6 allocation",
+            "Pubkey-based local IPv6 {} for remote {} is unavailable; falling back to sequential IPv6 allocation",
             *to_try,
             a);
 
@@ -422,7 +431,7 @@ namespace srouter::handlers
 
     void TunEndpoint::send_packet_to_net_if(IPPacket pkt)
     {
-        _router.loop.call([this, pkt = std::move(pkt)]() mutable { _net_if->write_packet(std::move(pkt)); });
+        _router._jq->call([this, pkt = std::move(pkt)]() mutable { _net_if->write_packet(std::move(pkt)); });
     }
 
     void TunEndpoint::rewrite_and_send_packet(IPPacket&& pkt, const ipv4& src, const ipv4& dest)
@@ -437,7 +446,7 @@ namespace srouter::handlers
     }
 
     // FIXME: we need separate flags for to-exit and from-exit
-    void TunEndpoint::handle_inbound_packet(IPPacket pkt, uint8_t type, NetworkAddress remote)
+    void TunEndpoint::handle_inbound_packet(IPPacket pkt, traffic_type type, NetworkAddress remote)
     {
         (void)type;              // TODO FIXME use this
         bool to_exit = false;    // TODO FIXME
@@ -490,7 +499,7 @@ namespace srouter::handlers
 
     void TunEndpoint::start_poller()
     {
-        _poller = std::make_unique<ev::FDPoller>(_router.loop, _net_if->PollFD(), [this] {
+        _poller = std::make_unique<ev::FDPoller>(_router.loop(), _net_if->PollFD(), [this] {
             for (auto pkt = _net_if->read_next_packet(); not pkt.empty(); pkt = _net_if->read_next_packet())
             {
                 log::trace(logcat, "packet router receiving {}", pkt.info_line());
