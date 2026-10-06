@@ -258,19 +258,24 @@ namespace srouter
         }
     }
 
-    void Profiling::stop_save_ticker()
+    void Profiling::stop_save_timer()
     {
         if (_disk_saver)
         {
             log::trace(logcat, "Stopping router profile disk saving");
-            _disk_saver->stop();
-            _disk_saver.reset();
+            _disk_jq->remove(_disk_saver);
+            _disk_saver = {};
         }
     }
 
-    void Profiling::start_save_ticker(Router& r)
+    void Profiling::start_save_timer(Router& r)
     {
-        _disk_saver = r.disk_loop.call_every(SAVE_INTERVAL, [this] {
+        // Overwriting a live id would orphan its timer on the queue, still saving and no longer
+        // reachable by stop_save_timer().
+        stop_save_timer();
+
+        _disk_jq = &r.disk_jq;
+        _disk_saver = r.disk_jq.add_timer(SAVE_INTERVAL, [this] {
             log::debug(logcat, "Writing router profiles to disk...");
             save_to_disk();
         });

@@ -1,23 +1,11 @@
 #include "queue_manager.hpp"
 
+#include "../underlying.hpp"
+
 #include <thread>
 
 namespace srouter::thread
 {
-#if __cplusplus >= 201703L
-    // Turn an enum into its underlying value.
-    template <typename E>
-    constexpr auto to_underlying(E e) noexcept
-    {
-        return static_cast<std::underlying_type_t<E>>(e);
-    }
-#else
-    template <typename E>
-    constexpr uint32_t to_underlying(E e) noexcept
-    {
-        return static_cast<uint32_t>(e);
-    }
-#endif
     static constexpr uint32_t GENERATION_COUNT_SHIFT = 0x2;
 
     // Max number of generations which can be held in an uint32_t.

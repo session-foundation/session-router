@@ -22,8 +22,8 @@ namespace srouter::path
 
     size_t Path::next_path_log_id = 0;
 
-    Path::Path(Router& rtr, std::span<const RelayContact> hop_rcs, PathHandler& handler, sys_ms expiry_ts)
-        : handler{handler.weak_from_this()}, _router{rtr}, _expiry{expiry_ts}, path_log_id{++next_path_log_id}
+    Path::Path(Router& rtr, std::span<const RelayContact> hop_rcs, sys_ms expiry_ts)
+        : _router{rtr}, _expiry{expiry_ts}, path_log_id{++next_path_log_id}
     {
         hops.resize(hop_rcs.size());
 
@@ -159,14 +159,6 @@ namespace srouter::path
             hops, other.hops, [](const TransitHop& a, const TransitHop& b) { return a.same_transit(b); });
     }
 
-    void Path::fetch_relay_contact(const RouterID& needed, std::function<void(path_control_response)> func)
-    {
-        oxenc::bt_dict_producer btdp;
-        auto btlp = btdp.append_list("x"sv);
-        btlp.append(needed.span());
-        send_path_control_message("fetch_rcs", btdp.span<std::byte>(), std::move(func));
-    }
-
     void Path::fetch_relay_contacts(std::span<const std::byte> body, std::function<void(path_control_response)> func)
     {
         send_path_control_message("fetch_rcs", body, std::move(func));
@@ -190,18 +182,17 @@ namespace srouter::path
         send_path_control_message("publish_cc", btdp.span<std::byte>(), std::move(func));
     }
 
-    void Path::resolve_sns(
-        std::span<const std::byte, SHORTHASHSIZE> name_hash, std::function<void(path_control_response)> func)
+    void Path::resolve_sns(std::span<const std::byte, 32> name_hash, std::function<void(path_control_response)> func)
     {
         oxenc::bt_dict_producer btdp;
         btdp.append("s"sv, name_hash);
         send_path_control_message("resolve_sns", btdp.span<std::byte>(), std::move(func));
     }
 
-    void Path::encrypt_path_message(std::vector<std::byte>& data, SymmNonce&& nonce, std::byte type, bool with_mac)
+    void Path::encrypt_path_message(std::vector<std::byte>& data, SymmNonce&& nonce, MessageType type, bool with_mac)
     {
         auto& hopid = edge().rxid;
-        auto inner_size = data.size() + (with_mac ? crypto::MAC_SIZE : 0);
+        auto inner_size = data.size() + (with_mac ? crypto::TAG_SIZE : 0);
         data.resize(inner_size + ENCRYPT_PATH_MESSAGE_OVERHEAD);
 
         static_assert(sizeof(SymmNonce) == SymmNonce::SIZE);
@@ -216,7 +207,7 @@ namespace srouter::path
             if (first && with_mac)
             {
                 first = false;
-                crypto::xchacha20_poly1305_encrypt(inner_payload, hop.shared_secret, nonce);
+                crypto::xchacha20_poly1305_encrypt_inplace(inner_payload, hop.shared_secret, nonce);
             }
             else
                 crypto::xchacha20(inner_payload, hop.shared_secret, nonce);
@@ -226,7 +217,7 @@ namespace srouter::path
 
         nonce.copy_to(bnonce);
         hopid.copy_to(bhop);
-        msgtype[0] = type;
+        msgtype[0] = static_cast<std::byte>(type);
     }
 
     std::string Path::decrypt_path_message(std::string_view payload)
@@ -241,28 +232,23 @@ namespace srouter::path
         auto [inner_payload, bnonce, bhop, msgtype] = split_span_tail<SymmNonce::SIZE, HopID::SIZE, 1>(body_span);
         SymmNonce nonce;
         nonce.assign(bnonce);
-        try
+        for (size_t i = 0; i != hops.size() - 1; i++)
         {
-            for (size_t i = 0; i != hops.size() - 1; i++)
-            {
-                nonce ^= hops[i].xor_nonce;
-                crypto::xchacha20(inner_payload, hops[i].shared_secret, nonce);
-            }
-            const auto& last_hop = hops.back();
-            nonce ^= last_hop.xor_nonce;
-            auto decrypted = crypto::xchacha20_poly1305_decrypt(inner_payload, last_hop.shared_secret, nonce);
-            return {reinterpret_cast<const char*>(decrypted.data()), decrypted.size()};
+            nonce ^= hops[i].xor_nonce;
+            crypto::xchacha20(inner_payload, hops[i].shared_secret, nonce);
         }
-        catch (std::exception& e)
-        {
-            log::warning(logcat, "path control message response decryption failed: {}", e.what());
-        }
+        const auto& last_hop = hops.back();
+        nonce ^= last_hop.xor_nonce;
+        if (auto decrypted = crypto::xchacha20_poly1305_decrypt_inplace(inner_payload, last_hop.shared_secret, nonce))
+            return {reinterpret_cast<const char*>(decrypted->data()), decrypted->size()};
+
+        log::warning(logcat, "path control message response decryption failed");
         return {};
     }
 
     void Path::send_path_data_message(std::vector<std::byte>&& data, SymmNonce&& nonce)
     {
-        encrypt_path_message(data, std::move(nonce), DATA_MESSAGE_TYPE, false /* mac on session payload */);
+        encrypt_path_message(data, std::move(nonce), MessageType::Data, false /* mac on session payload */);
         _router.link_endpoint().send_datagram(edge().router_id, std::move(data));
     }
 
@@ -298,12 +284,12 @@ namespace srouter::path
         payload.reserve(inner_payload.size() + ENCRYPT_PATH_MESSAGE_OVERHEAD_MAC);
         payload.resize(inner_payload.size());
         std::memcpy(payload.data(), inner_payload.data(), inner_payload.size());
-        encrypt_path_message(payload, SymmNonce::make_random(), CONTROL_MESSAGE_TYPE, true /* include mac */);
+        encrypt_path_message(payload, SymmNonce::make_random(), MessageType::Control, true /* include mac */);
         _router.link_endpoint().send_command(
             edge().router_id, "path_control", std::move(payload), std::move(decryptor));
     }
 
-    void Path::send_session_control_message(std::vector<std::byte>&& body, SymmNonce&& nonce, std::byte type)
+    void Path::send_session_control_message(std::vector<std::byte>&& body, SymmNonce&& nonce, MessageType type)
     {
         encrypt_path_message(body, std::move(nonce), type, false /* mac on session payload */);
         _router.link_endpoint().send_command(edge().router_id, "session_control", std::move(body), nullptr);

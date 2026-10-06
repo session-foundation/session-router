@@ -1,7 +1,6 @@
 #pragma once
 
 #include "crypto/keys.hpp"
-#include "crypto/types.hpp"
 
 #include <nlohmann/json_fwd.hpp>
 

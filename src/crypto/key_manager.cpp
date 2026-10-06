@@ -77,7 +77,7 @@ namespace srouter
             else
             {
                 log::debug(logcat, "Generating ephemeral client key...");
-                secret_key = crypto::generate_ed25519();
+                secret_key = Ed25519SecretKey::generate();
             }
 
             public_key.assign(secret_key.pubkey_span());

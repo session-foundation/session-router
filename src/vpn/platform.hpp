@@ -120,4 +120,8 @@ namespace srouter::vpn
     /// create native vpn platform
     std::shared_ptr<Platform> MakeNativePlatform(srouter::Context* ctx);
 
+    // Settable factory for the platform's native vpn::Platform, installed by the full library
+    // (srouter::full::initialize) to &MakeNativePlatform.  Null in embedded/core-only builds.
+    inline std::shared_ptr<Platform> (*make_native_platform)(srouter::Context* ctx) = nullptr;
+
 }  // namespace srouter::vpn

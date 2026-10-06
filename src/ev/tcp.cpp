@@ -1,10 +1,17 @@
 #include "tcp.hpp"
 
 #include "net/ip_packet.hpp"
+#include "util/logging.hpp"
 #include "util/logging/buffer.hpp"
+
+#include <event2/buffer.h>
+#include <event2/bufferevent.h>
+#include <event2/listener.h>
 
 namespace srouter
 {
+    static_assert(std::same_as<evutil_socket_t, TCPConnection::fd_t>);
+
     static auto logcat = oxen::log::Cat("ev-tcp");
 
     constexpr auto evconnlistener_deleter = [](::evconnlistener *e) {
@@ -139,7 +146,7 @@ namespace srouter
             size_t written = 0;
             while (written < pending_buffer.size())
             {
-                constexpr size_t chunk_size = 1500;  // FIXME: this, obviously; ass number
+                constexpr size_t chunk_size = 1500;  // FIXME: this, obviously; arbitrary number
                 size_t s = std::min(chunk_size, pending_buffer.size() - written);
                 if (bufferevent_write(_bev, cur, s) != 0)
                 {
@@ -221,7 +228,7 @@ namespace srouter
         event_base *_ev, quic::Address src, std::shared_ptr<quic::Stream> s, uint16_t port)
     {
         sockaddr_in _addr = src.in4();
-        _addr.sin_port = htonl(port);
+        _addr.sin_port = htons(port);
 
         // NB: BEV_OPT_THREADSAFE not used because this should only ever be touched
         // by a single thread.
@@ -248,7 +255,7 @@ namespace srouter
         sockaddr_in _tcp{};
         _tcp.sin_family = AF_INET;
         _tcp.sin_addr.s_addr = INADDR_ANY;
-        _tcp.sin_port = htonl(port);
+        _tcp.sin_port = htons(port);
 
         _tcp_listener = _ev.template shared_ptr<struct evconnlistener>(
             evconnlistener_new_bind(

@@ -1,6 +1,7 @@
 #include "config/config.hpp"  // for ensure_config
 #include "constants/platform.hpp"
 #include "constants/version.hpp"
+#include "full/init.hpp"
 #include "util/exceptions.hpp"
 #include "util/thread/threading.hpp"
 
@@ -33,6 +34,8 @@ namespace
 
         std::filesystem::path config;
 
+        std::string log_levels;
+
         // windows options
         bool win_install = false;
         bool win_remove = false;
@@ -46,7 +49,7 @@ namespace
     // operational function definitions
     int srouter_main(int, char**);
     void handle_signal(int sig);
-    void start_srouter(std::filesystem::path confFile, bool snode);
+    void start_srouter(std::filesystem::path confFile, bool snode, std::string log_levels);
 
     // variable declarations
     static auto logcat = srouter::log::Cat("daemon");
@@ -335,6 +338,11 @@ namespace
         cli.add_option("config,-c,--config", options.config, "Path to session-router.ini configuration file")
             ->required();
 
+        cli.add_option(
+            "-l,--log-levels",
+            options.log_levels,
+            "Specify additional log levels to apply after the config file level");
+
         if constexpr (srouter::platform::is_windows)
         {
             cli.add_flag("--install", options.win_install, "Install win32 daemon to SCM");
@@ -400,7 +408,7 @@ namespace
 
         try
         {
-            start_srouter(options.config, options.relay);
+            start_srouter(std::move(options.config), options.relay, std::move(options.log_levels));
         }
         catch (const std::exception& e)
         {
@@ -414,7 +422,7 @@ namespace
             while (ftr.wait_for(1s) != std::future_status::ready)
             {
                 // do periodic non Session Router related tasks here
-                if (ctx and ctx->is_up() and not ctx->looks_alive())
+                if (ctx and ctx->is_running() and not ctx->looks_alive())
                 {
                     auto deadlock_cat = srouter::log::Cat("deadlock");
                     srouter::log::critical(deadlock_cat, "Router has deadlocked!");
@@ -436,7 +444,7 @@ namespace
     }
 
     // this sets up, configures and runs the main context
-    void start_srouter(std::filesystem::path confFile, bool snode)
+    void start_srouter(std::filesystem::path confFile, bool snode, std::string log_level)
     {
         srouter::log::info(logcat, "starting {}", srouter::VERSION_FULL);
         try
@@ -453,14 +461,18 @@ namespace
                 throw;
             }
 
-            ctx.emplace(/*embedded=*/false);
+            if (!log_level.empty())
+            {
+                if (!conf->logging.levels.empty())
+                    conf->logging.levels += ';';
+                conf->logging.levels += log_level;
+            }
+
+            ctx.emplace(/*embedded=*/false, std::move(*conf));
 
             signal(SIGINT, handle_signal);
             signal(SIGTERM, handle_signal);
             signal(SIGKILL, handle_signal);
-
-            srouter::util::SetThreadName("srtr-main");
-            ctx->start(std::move(*conf));
         }
         catch (srouter::util::bind_socket_error& ex)
         {
@@ -484,6 +496,11 @@ int main(int argc, char* argv[])
     oxen::log::add_sink(srouter::log::Type::Print, "stderr");
     oxen::log::reset_level(srouter::log::Level::info);
     // oxen::log::set_level("quic", oxen::log::Level::info);
+
+    // Set up full (non-embedded) application support (native service manager, stricter config
+    // validators, ...).  Must happen before config is loaded and before the Context is constructed
+    // (which calls give_context()) and, on win32, before the service control dispatcher runs.
+    srouter::full::initialize();
 
     // TODO FIXME: this seems to be segfaulting?
     // srouter::logRingBuffer = std::make_shared<srouter::log::RingBufferSink>(100);
