@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <future>
 #include <iostream>
+#include <regex>
 
 extern "C"
 {
@@ -18,7 +19,7 @@ int main(int argc, char** argv)
 {
     if (argc <= 1)
     {
-        std::cerr << "USAGE: " << argv[0] << " {PUBKEY.sesh | PUBKEY.snode | ONS.loki}\n";
+        std::cerr << "USAGE: " << argv[0] << " {PUBKEY.sesh | PUBKEY.snode | ONS.loki}[:REMOTEPORT]\n";
         return 1;
     }
 
@@ -32,10 +33,19 @@ int main(int argc, char** argv)
 
     std::string target{argv[1]};
 
+    int port = 12345; // Default, but updated if target ends with :PORT
+    if (std::smatch m; std::regex_match(target, m, std::regex{"(.*):(\\d+)$"})) {
+        port = std::stoi(m[2]);
+        target = m[1];
+    }
+
     auto srouter = std::make_unique<session::router::SessionRouter>(std::filesystem::path{"jank.ini"});
 
     std::promise<void> prom;
     std::promise<void> conn_prom;
+
+    // Holding this is what keeps the tunnel up; dropping it releases it.
+    session::router::udp_tunnel tunnel;
 
     bool first_conn = true;
     srouter->on_connected([&] {
@@ -81,21 +91,23 @@ int main(int argc, char** argv)
 
         target = resolve_prom.get_future().get();
 
-        srouter->establish_udp(
+        tunnel = srouter->establish_udp(
             target,
-            12345,
-            [&prom, &start](auto udp_info) {
+            port,
+            [&prom, &start, &port](auto udp_info) {
                 std::cout
                     << "\n\x1b[32;1mSession established ("
                     << std::chrono::round<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count()
-                    << "ms); UDP bound to port [::1]:" << udp_info.local_port << "\x1b[0m\n\n"
+                    << "ms); remote UDP port " << port << " bound to local port [::1]:" << udp_info.local_port << "\x1b[0m\n\n"
                     << std::flush;
                 prom.set_value();
             },
-            [&prom]() {
+            [&prom](auto failure) {
                 try
                 {
-                    throw std::runtime_error{"Session timed out!"};
+                    throw std::runtime_error{
+                        failure == session::router::tunnel_failure::unreachable ? "Remote is unreachable!"
+                                                                               : "Session timed out!"};
                 }
                 catch (...)
                 {
@@ -112,11 +124,20 @@ int main(int argc, char** argv)
         }
         size_t hop_count = 1;
         std::cout << "Path to snode:\n";
-        for (const auto& [snode, ip] : *current_path)
+        for (const auto& [snode, ip] : current_path->hops)
         {
             std::cout << "\tHop " << hop_count << ":\t" << snode << " @ " << ip << "\n";
             hop_count++;
         }
+        std::cout << "\tLatency: " << current_path->latency.count() << "ms, jitter: "
+                  << current_path->jitter.count() << "us, pings: " << current_path->ping_responses
+                  << " ok / " << current_path->ping_timeouts << " timed out ("
+                  << current_path->ping_recent_timeouts << " in a row)\n"
+                  << "\tExpires in "
+                  << std::chrono::round<std::chrono::seconds>(
+                         current_path->expiry - std::chrono::system_clock::now())
+                         .count()
+                  << "s\n";
     }
     catch (const std::exception& e)
     {
@@ -133,7 +154,7 @@ int main(int argc, char** argv)
               << "    Ctrl-C -- shut down\x1b[0m\n\n\n";
 
     /*
-    srouter.map_tcp_remote_port(std::string{argv[1]}, 12345,
+    srouter.map_tcp_remote_port(std::string{argv[1]}, port,
         [&](auto tunnel_info) {
           std::cout << "\n\nTCP bound to port " << tunnel_info.local_port << "\n\n";
         },
@@ -151,13 +172,16 @@ int main(int argc, char** argv)
             {
                 case SIGHUP:
                     std::cout << "\n\n\n\x1b[33;1mHangup signal received; closing UDP tunnel\x1b[0m\n\n\n";
-                    srouter->close_udp(target, 12345);
+                    tunnel.reset();
                     break;
                 case SIGUSR1:
                 {
                     std::cout << "\n\n\n\x1b[32;1mSIGUSR1 received: (re-)opening UDP tunnel\x1b[0m\n";
-                    auto ti = srouter->establish_udp(target, 12345);
-                    std::cout << "\n\x1b[32;1mUDP bound to port " << ti.local_port << "\x1b[0m\n\n";
+                    tunnel = srouter->establish_udp(target, port);
+                    if (tunnel)
+                        std::cout << "\n\x1b[32;1mUDP bound to port " << tunnel->local_port << "\x1b[0m\n\n";
+                    else
+                        std::cout << "\n\x1b[31;1m" << target << " is unreachable\x1b[0m\n\n";
                     break;
                 }
                 case SIGUSR2:

@@ -40,6 +40,11 @@ namespace srouter::dns
         // something outside of Session Router domains.
         std::optional<Unbound> _unbound;
 
+        // Our serial for SOA records (typically only included for negative responses, i.e.
+        // something we are responsible for that doesn't exist).  We increment this every time it is
+        // used to avoid caching issues.
+        uint32_t _soa_serial = 1;
+
         // Called to check if the request is for a local name (i.e. .sesh, .snode, .loki, or a PTR
         // record for one of the addresses in our tun).  If so, this handles the request and returns
         // true; otherwise returns false.
@@ -51,6 +56,12 @@ namespace srouter::dns
 
         // Answers the question recursively via our configured upstream DNS servers (if any)
         void forward(Message&& m, ReplyCallback&& reply, bool tcp);
+
+        // Adds an SOA authority record to the message; generally you should only do this for
+        // negative replies (i.e. record does not exist) when you want the lack of record to be
+        // cachable for up to `ttl`.  Including it in other responses is pointless: positive results
+        // have their own TTL, and not including an SOA should prevent caching.
+        void add_nx_soa(Message& m, std::string domain, std::chrono::seconds ttl);
     };
 
 }  // namespace srouter::dns

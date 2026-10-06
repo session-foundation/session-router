@@ -35,13 +35,10 @@ namespace srouter::sys
             }
         }
 
-        void report_periodic_stats() override
+        void report_periodic_stats(const std::string& stats) override
         {
-            if (m_Context and m_Context->router and not m_disable)
-            {
-                auto status = fmt::format("WATCHDOG=1\nSTATUS={}", m_Context->router->status_line());
-                ::sd_notify(0, status.c_str());
-            }
+            auto status = fmt::format("WATCHDOG=1\nSTATUS={}", stats);
+            ::sd_notify(0, status.c_str());
         }
 
         void system_changed_our_state(ServiceState) override
@@ -51,6 +48,7 @@ namespace srouter::sys
     };
 
     SD_Manager _manager{};
-    I_SystemLayerManager* const service_manager = &_manager;
+
+    void install_native_service_manager() { service_manager = &_manager; }
 
 }  // namespace srouter::sys

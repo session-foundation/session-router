@@ -2,7 +2,6 @@
 
 #include "address/address.hpp"
 #include "contact/router_id.hpp"
-#include "crypto/types.hpp"
 #include "util/str.hpp"
 #include "util/thread/threading.hpp"
 

@@ -5,15 +5,15 @@ if(APPLE)
 else()
   add_executable(session-router session_router.cpp)
 endif()
-target_link_libraries(session-router PRIVATE libsessionrouter CLI11)
+target_link_libraries(session-router PRIVATE session-router::full CLI11::CLI11)
 enable_lto(session-router)
 
 add_executable(session-router-cntrl session-router-cntrl.cpp utils.cpp)
-target_link_libraries(session-router-cntrl PRIVATE session-router-base CLI11)
+target_link_libraries(session-router-cntrl PRIVATE session-router-base session-router-base-full CLI11::CLI11)
 enable_lto(session-router-cntrl)
 
 add_executable(session-router-config session-router-config.cpp)
-target_link_libraries(session-router-config PRIVATE session-router-conf CLI11)
+target_link_libraries(session-router-config PRIVATE session-router-conf session-router-base-full CLI11::CLI11)
 enable_lto(session-router-config)
 
 set(exetargets session-router session-router-cntrl session-router-config)

@@ -43,13 +43,19 @@ namespace srouter::dns
         std::span<std::byte> buf{tmp};
         uint16_t buf_offset = 0;
 
+        // A Message is only ever encoded as a response (upstream forwarding goes through unbound
+        // and RawMessage), so QR always belongs here regardless of what the individual reply path
+        // set up.  AD, on the other hand, has to be cleared: we copy the header fields from the
+        // request, but we do no DNSSEC validation and so must not claim the data is authenticated.
+        uint16_t fields = (hdr_fields | flags_QR) & ~flags_AD;
+
         buf_offset += write_ints_into(
             buf,
             hdr_id,
-            hdr_fields,
+            fields,
             question ? uint16_t{1} : uint16_t{0},
             static_cast<uint16_t>(answers.size()),
-            static_cast<uint16_t>(0 /*authorities.size()*/),
+            static_cast<uint16_t>(authorities.size()),
             static_cast<uint16_t>(additional_edns ? 1 : 0 /*additional.size()*/));
 
         if (question)
@@ -66,6 +72,9 @@ namespace srouter::dns
             for (auto& a : answers)
                 a->encode(buf, prev_names, buf_offset);
 
+            for (auto& a : authorities)
+                a->encode(buf, prev_names, buf_offset);
+
             if (additional_edns)
                 additional_edns->encode(buf, prev_names, buf_offset);
         }
@@ -73,7 +82,7 @@ namespace srouter::dns
         {
             log::debug(logcat, "Response too large!  Setting truncation bit");
 
-            oxenc::write_host_as_big(hdr_fields | flags_TC, tmp.data() + 2);
+            oxenc::write_host_as_big(fields | flags_TC, tmp.data() + 2);
 
             // Reset our buffer position back to just after the questions were added.  We do this
             // even if we aren't going to add EDNS stuff below, because we are not supposed to
@@ -169,6 +178,7 @@ namespace srouter::dns
         {
             log::warning(logcat, "Ignoring archaic DNS request with {} > 1 questions", qd_count);
             m.bad_extract = true;
+            m.formerr();
             return result;
         }
         // Ignore these:
@@ -295,6 +305,7 @@ namespace srouter::dns
         {
             log::debug(logcat, "failed to parse DNS message: {}", e.what());
             m.bad_extract = true;
+            m.formerr();
         }
 
         return result;

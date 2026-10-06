@@ -34,6 +34,11 @@ if(EMBEDDED_CFG)
   link_libatomic()
 endif()
 
+# Everything below this is for Windows-specific wintun, not used for embedded-only builds
+if(NOT SROUTER_FULL)
+  return()
+endif()
+
 set(WINTUN_VERSION 0.14.1 CACHE STRING "wintun version")
 set(WINTUN_MIRROR ${LOCAL_MIRROR} https://www.wintun.net/builds
   CACHE STRING "wintun mirror(s)")

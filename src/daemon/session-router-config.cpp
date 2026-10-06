@@ -197,7 +197,7 @@ int main(int argc, char* argv[])
         }
         else if (gen_key)
         {
-            auto secret_key = crypto::generate_ed25519();
+            auto secret_key = Ed25519SecretKey::generate();
             check_overwrite(target);
             KeyManager::write_to_file(secret_key, target);
 
@@ -226,7 +226,7 @@ int main(int argc, char* argv[])
                 }
                 else
                 {
-                    skey = crypto::generate_ed25519();
+                    skey = Ed25519SecretKey::generate();
                     KeyManager::write_to_file(skey, key_file);
                     action = "Generated persistent"sv;
                 }

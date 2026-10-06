@@ -2,26 +2,17 @@
 
 #include "address/map.hpp"
 #include "ev/fd_poller.hpp"
+#include "handlers/tun_interface.hpp"
 #include "net/ip_packet.hpp"
 #include "util/thread/threading.hpp"
 #include "vpn/packet_router.hpp"
 #include "vpn/platform.hpp"
 
-namespace srouter::traffic_type
-{
-    constexpr uint8_t UDP = 0;
-    constexpr uint8_t TCP = 1;
-    constexpr uint8_t RAW = 2;
-    constexpr uint8_t TUNNELED_QUIC = 3;
-
-    inline constexpr bool is_valid(uint8_t t) { return t >= UDP && t <= TUNNELED_QUIC; }
-}  // namespace srouter::traffic_type
-
 namespace srouter::handlers
 {
     inline constexpr auto TUN = "tun"sv;
 
-    class TunEndpoint
+    class TunEndpoint : public ITunnel
     {
       public:
         TunEndpoint(Router& r);
@@ -60,7 +51,7 @@ namespace srouter::handlers
 
         void configure();
 
-        std::string get_if_name() const;
+        std::string get_if_name() const override;
 
         // Returns the Session Router tun IPv4 address
         const ipv4& get_ipv4() const;
@@ -69,12 +60,12 @@ namespace srouter::handlers
 
         // Returns the Session Router tun IPv4/6 network; the address is set to this tun device's
         // local address (i.e. typically the .1 address).
-        const ipv4_net& get_ipv4_network() const;
-        const ipv6_net& get_ipv6_network() const;
+        const ipv4_net& get_ipv4_network() const override;
+        const ipv6_net& get_ipv6_network() const override;
 
         void tick_tun(sys_ms now);
 
-        void stop();
+        void stop() override;
 
         bool is_service_node() const;
 
@@ -87,7 +78,7 @@ namespace srouter::handlers
         void rewrite_and_send_packet(IPPacket&& pkt, const ipv4& src, const ipv4& dest);
         void rewrite_and_send_packet(IPPacket&& pkt, const ipv6& src, const ipv6& dest);
 
-        void handle_inbound_packet(IPPacket pkt, uint8_t type, NetworkAddress remote);
+        void handle_inbound_packet(IPPacket pkt, traffic_type type, NetworkAddress remote) override;
 
         // Handles an inbound packet coming IN from the network
         // bool handle_inbound_packet(IPPacket pkt, NetworkAddress remote, bool is_exit_session, bool
@@ -97,7 +88,7 @@ namespace srouter::handlers
         // Router remote address with it.  If the mapping already exists, this returns the existing
         // IP, otherwise it assigns a new one.  The association persists until unmapped.  Returns
         // the mapped ipv6 address.
-        ipv6 map6(const NetworkAddress& remote);
+        ipv6 map6(const NetworkAddress& remote) override;
 
         // Obtains an available IPv4 address from the tun device and associates the given Session
         // Router remote address with it.  If the mapping already exists, this returns the existing
@@ -108,13 +99,22 @@ namespace srouter::handlers
         // Returns the mapped addresses, or nullptr if an address could not be assigned (i.e.
         // because of IPv4 exhaustion in the allocated tun range, or because this client does not
         // support IPv4 addressing at all).
-        std::optional<ipv4> map4(const NetworkAddress& remote);
+        std::optional<ipv4> map4(const NetworkAddress& remote) override;
 
         // Takes an IPv4 or IPv6 address and returns {addr, true} if the address is a tun address
         // range IP mapped to an address; {nullptr, true} if it is a tun address range IP but
         // without a mapped address; or {nullptr, false} if it is not a tun address range IP.
+        std::pair<std::optional<NetworkAddress>, bool> reverse_lookup(const ipv4& ip) override
+        {
+            return reverse_lookup_impl(ip);
+        }
+        std::pair<std::optional<NetworkAddress>, bool> reverse_lookup(const ipv6& ip) override
+        {
+            return reverse_lookup_impl(ip);
+        }
+
         template <typename IP>
-        std::pair<std::optional<NetworkAddress>, bool> reverse_lookup(const IP& ip)
+        std::pair<std::optional<NetworkAddress>, bool> reverse_lookup_impl(const IP& ip)
             requires std::same_as<IP, ipv4> || std::same_as<IP, ipv6>
         {
             std::pair<std::optional<NetworkAddress>, bool> result;
@@ -135,7 +135,7 @@ namespace srouter::handlers
         // Expires a mapped IP for the given remote from the tun IP map.  The address will be added
         // as the most recently used address, and (if the configured cache size is exceeded) the least
         // recently used address will be forgotten.
-        void expire(const NetworkAddress& remote);
+        void expire(const NetworkAddress& remote) override;
 
         std::optional<net::ExitPolicy> get_exit_policy() const { return _exit_policy; }
 
@@ -150,7 +150,7 @@ namespace srouter::handlers
 
         Router& router() { return _router; }
 
-        void start_poller();
+        void start_poller() override;
 
       private:
         // Stores assigned IP's for each session in/out of this Session Router instance

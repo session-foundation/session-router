@@ -27,42 +27,38 @@ namespace srouter
     // TODO FIXME this class seems unnecessary, we should get rid of it.
     struct Context
     {
-        std::unique_ptr<Router> router;
+        Router* router = nullptr;
 
-        explicit Context(bool embedded);
+        explicit Context(bool embedded, Config conf, std::shared_ptr<oxen::quic::Loop> loop = nullptr);
         ~Context();
-
-        // Starts Session Router; returns as soon as Session Router is up and running (or throws if startup
-        // fails).  The loop may be provided in order to use an existing loop, but otherwise a new
-        // one will be started.
-        void start(Config conf, std::shared_ptr<oxen::quic::Loop> loop = nullptr);
-
-        // Waits for Session Router to finish.  Note that this does not *trigger* such a shutdown; for that
-        // you would call `stop()` before this.
-        void wait();
 
         // Call this to deliver a signal, such as SIGTERM or SIGINT to stop Session Router if currently
         // running.  (This can be called from any thread).
         void signal(int sig);
 
-        // Initiates Session Router shutdown, and returns immediately (without waiting for shutdown).  Call
-        // `wait()` after this if you also want to wait for shutdown to complete.
-        void stop();
-
-        bool is_up() const;
-
-        bool is_stopping() const;
-
-        // Returns true if Session Router has stopped and `wait()` needs to be called to finish
-        // destruction.
-        bool is_waiting() const;
-
+        // Anything calling this is responsible for not doing so during or after this object's destructor.
         bool looks_alive() const;
+
+        bool is_running() const;
+
+        // Blocks the current thread until the Router object has shut down.
+        void wait();
 
         int androidFD = -1;
 
       private:
+        // Starts Session Router; returns as soon as Session Router is up and running (or throws if startup
+        // fails).  The loop may be provided in order to use an existing loop, but otherwise a new
+        // one will be started.
+        void start(Config conf, std::shared_ptr<oxen::quic::Loop> loop = nullptr);
+
+        void stop();
+
+        // We keep a copy of the event loop to ensure that it exists through the lifetime of Router
+        std::shared_ptr<oxen::quic::Loop> router_loop;
+
         bool embedded;
+        std::atomic<bool> running{true};
         std::future<void> lifetime_waiter;
     };
 }  // namespace srouter
