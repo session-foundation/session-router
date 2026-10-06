@@ -1,3 +1,124 @@
+session-router (1.1.0~rc1-1~deb13) trixie; urgency=medium
+
+  [ Jason Rhinelander ]
+  * Redo tun auto-selection to retry up to 50 times
+  * Require libquic 1.7
+  * make sure oxen-logging-fmt-spdlog is always available
+  * Add leancrypto static lib build
+  * Add -l/--log-levels command-line argument
+  * [WIP] PFS + PQ session init/accept
+  * encrypt/decrypt handling and log fixes
+  * Remove pivot rejecting unknown session msg types
+  * Rework handshake to avoid new message type
+  * Workaround meson and leancrypto bugs
+  * static build dep updates & ninja build fix
+  * fix badge and CI urls
+  * ci: add meson to build deps
+  * disable building leancrypto tests
+  * Patch libsodium with upstream arm64 build fix
+  * Update oxen repo key
+  * Replace leancrypto with mlkem_native
+  * bump required libquic version for timeout fix
+  * Drop setting thread name on the "main()" thread
+  * Fix PQ handshake description to match implementation
+  * Fix linking error in embedded builds
+  * Jank test: allow specifying remote port
+  * Fix another embedded linking error
+  * Bump clang versions
+  * replaced deprecated exec_program call
+  * Fix LTO mismatch
+  * Update to latest libquic
+  * Privatize libevent usage
+  * Bump oxen-libquic (for bumped oxen-logging)
+  * Bump oxen-mq for newer cppzmq
+  * Avoid library conflicts
+  * Avoid library conflicts, part 2
+  * More libsession-util embedded session-router fixes
+  * fix oxen::logging target even more
+  * Fix missing libevent linkage
+  * disable jni for embedded-only android
+  * optimize map lookup
+  * Use session-deps submodule for getting dependencies
+  * Fix uninitialized router pointer
+  * More session-dep conversions and fixes
+  * Update session-deps for cmake 3.18 fix
+  * Fix PTR response encoding
+  * DNS: Add SOA records to negative responses
+  * Fix conflicting targets when used from libsession-util
+  * Fix shutdown issues found in libsession
+  * Update session-router (to fix send_fin bug)
+  * Replace non-working per-RC fetch with bucket-based lookup
+  * Make suggested_mtu useful
+  * bump session-deps to latest for build fixes
+  * Use current deb.oxen.io apt signing key (2026 sha256 subkey), matching dev
+  * Fix inverted bt-list check in session handshake parsing
+  * Don't de-establish a live session on an unauthenticated accept
+  * Make service_manager settable and add the srouter::full::initialize entry point
+  * Extract the rpc/oxend/omq/reachability subsystem behind core interfaces
+  * Extract tun/dns/platform behind core interfaces and remove SROUTER_EMBEDDED_ONLY
+  * Avoid IPv6 subnet anycast address
+  * Set QR (and clear AD) on encoded DNS responses
+  * Fix A/AAAA lookup responses
+  * Reply FORMERR to unparseable DNS requests
+  * Set reply flags on SRV NODATA responses
+  * Send the reply for a CNAME query on an SNS name
+  * Split into libsessionrouter-core and libsessionrouter shared libraries
+  * Report relays we have no relay contact for as unreachable
+  * Run unmap_udp_remote_port on the job queue thread
+  * Hand out UDP tunnels as claims, and say why one failed
+  * Enumerate establish_udp's outcomes
+  * Let a client bootstrap more than once
+  * Fetch RouterIDs from a corroborated majority, or not at all
+  * Stop RC bucket hashes going stale on version changes
+  * Return {stored, gossip} from put_rc
+  * Log what an RC fetch actually returned
+  * Actually remove an RC's hash from its bucket hash on removal
+  * Log which RCs a fetch returned that differ from ours
+  * Replace dead bootstrap node
+  * Stop rebuilding paths to a relay we know is unreachable
+  * Replace broken debian 11 builds with debian 12 / jammy
+  * bump libquic
+  * bump libquic
+  * add missing headers
+  * Update libquic for the JobQueue timer registry
+  * Switch timers to the JobQueue timer registry
+  * Remove never-assigned ticker members
+  * Register timers on the job queues rather than the raw loop
+  * Require liboxenquic 1.9.0
+  * Clear the 0-RTT saver during nodedb cleanup
+  * Hold TimerIDs directly rather than in an optional
+  * Include timer_id.hpp rather than loop.hpp for timer members
+  * Don't orphan a timer by restarting a component
+  * Don't let a path build outlive the handler that started it
+  * Default-initialize path ping statistics
+  * Expose path statistics through the embedded API
+  * ci-upload: upload .ddeb debug packages and .buildinfo files
+  * Bump libquic to 1.11.0
+  * Update UDPSocket calls for the libquic 1.11.0 API
+  * Drop tunnel_info::suggested_mtu
+  * Derive the UDP tunnel's link split threshold from the framing constants
+  * Add [bind]:max-udp-payload to cap link connection packet sizes
+  * Build static deps without LTO in the clang CI builds
+
+  [ Thomas Winget ]
+  * defer session removal after close for iteration safety
+  * further clean up session close
+  * remove redundant capture
+  * Make Router use libquic JobQueue
+  * Router deleter should execute on its Loop
+  * fix potential Loop/Router destructor deadlock
+  * Simplify Context and Router lifetime
+  * fix missing include
+
+  [ Xepayac ]
+  * fix: use htons() instead of htonl() for sin_port, fix cmake typo
+  * fix: typos — occured→occurred, fallack→fallback, comment cleanup
+
+  [ Audric Ackermann ]
+  * Recognise arm64 as a macOS target architecture
+
+ -- Jason Rhinelander <jason@session.foundation>  Tue, 06 Oct 2026 12:38:39 -0300
+
 session-router (1.0.2-1~deb13) unstable; urgency=medium
 
   * Properly wrap `session-router-config --help` output
