@@ -1,16 +1,13 @@
 #pragma once
 
-#include "util/logging.hpp"
-
 #include <oxen/quic/loop.hpp>
 #include <oxen/quic/stream.hpp>
 
 extern "C"
 {
 #include <arpa/inet.h>
-#include <event2/buffer.h>
-#include <event2/bufferevent.h>
-#include <event2/listener.h>
+    struct bufferevent;
+    struct evconnlistener;
 }
 
 namespace srouter
@@ -21,7 +18,14 @@ namespace srouter
 
     struct TCPConnection
     {
-        TCPConnection(bufferevent* _bev, evutil_socket_t _fd, std::shared_ptr<quic::Stream> _s);
+        // This should be a evutil_socket_t; we check in the .cpp:
+#ifdef _WIN32
+        using fd_t = intptr_t;
+#else
+        using fd_t = int;
+#endif
+
+        TCPConnection(bufferevent* _bev, fd_t _fd, std::shared_ptr<quic::Stream> _s);
 
         TCPConnection() = delete;
 
@@ -34,7 +38,7 @@ namespace srouter
         ~TCPConnection();
 
         bufferevent* bev;
-        evutil_socket_t fd;
+        fd_t fd;
 
         std::shared_ptr<quic::Stream> stream;
 
@@ -50,7 +54,7 @@ namespace srouter
         void resume_reading();
     };
 
-    using tcpconn_hook = std::function<TCPConnection*(bufferevent*, evutil_socket_t)>;
+    using tcpconn_hook = std::function<TCPConnection*(bufferevent*, TCPConnection::fd_t)>;
 
     class TCPHandle
     {

@@ -1,87 +1,28 @@
-option(SUBMODULE_CHECK "Enables checking that vendored library submodules are up to date" ON)
-if(SUBMODULE_CHECK)
-  find_package(Git)
-  if(GIT_FOUND)
-    function(check_submodule relative_path)
-      execute_process(COMMAND git rev-parse "HEAD" WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/${relative_path} OUTPUT_VARIABLE localHead)
-      execute_process(COMMAND git rev-parse "HEAD:external/${relative_path}" WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} OUTPUT_VARIABLE checkedHead)
-      string(COMPARE EQUAL "${localHead}" "${checkedHead}" upToDate)
-      if (upToDate)
-        message(STATUS "Submodule 'external/${relative_path}' is up-to-date")
-      else()
-        message(FATAL_ERROR "Submodule 'external/${relative_path}' is not up-to-date. Please update with\ngit submodule update --init --recursive\nor run cmake with -DSUBMODULE_CHECK=OFF")
-      endif()
+message(STATUS "Checking submodules")
+check_submodule(CLI11)
+check_submodule(nlohmann)
+check_submodule(oxen-libquic)
+check_submodule(oxen-mq)
+check_submodule(pybind11)
+check_submodule(sqlite_orm)
+check_submodule(mlkem-native)
 
-      # Extra arguments check nested submodules
-      foreach(submod ${ARGN})
-        execute_process(COMMAND git rev-parse "HEAD" WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/${relative_path}/${submod} OUTPUT_VARIABLE localHead)
-        execute_process(COMMAND git rev-parse "HEAD:${submod}" WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/${relative_path} OUTPUT_VARIABLE checkedHead)
-        string(COMPARE EQUAL "${localHead}" "${checkedHead}" upToDate)
-        if (NOT upToDate)
-            message(FATAL_ERROR "Nested submodule '${relative_path}/${submod}' is not up-to-date. Please update with\ngit submodule update --init --recursive\nor run cmake with -DSUBMODULE_CHECK=OFF")
-        endif()
-      endforeach()
-    endfunction ()
-
-    message(STATUS "Checking submodules")
-    check_submodule(CLI11)
-    check_submodule(nlohmann)
-    check_submodule(oxen-libquic)
-    check_submodule(oxen-mq)
-    check_submodule(pybind11)
-    check_submodule(sqlite_orm)
-  endif()
+if(NOT TARGET oxenc::oxenc)
+    sessiondep_or_submodule(liboxenc 1.5.0 oxen-libquic/external/oxen-encoding oxenc::oxenc)
 endif()
 
-macro(system_or_submodule BIGNAME smallname target pkgconf subdir)
-  if(NOT TARGET ${target})
-    option(FORCE_${BIGNAME}_SUBMODULE "force using ${smallname} submodule" OFF)
-    if(NOT BUILD_STATIC_DEPS AND NOT FORCE_${BIGNAME}_SUBMODULE AND NOT FORCE_ALL_SUBMODULES)
-      pkg_check_modules(${BIGNAME} ${pkgconf} IMPORTED_TARGET)
-    endif()
-    if(${BIGNAME}_FOUND)
-      add_library(${smallname} INTERFACE)
-      if(NOT TARGET PkgConfig::${BIGNAME} AND CMAKE_VERSION VERSION_LESS "3.21")
-        # Work around cmake bug 22180 (PkgConfig::THING not set if no flags needed)
-      else()
-        target_link_libraries(${smallname} INTERFACE PkgConfig::${BIGNAME})
-      endif()
-      message(STATUS "Found system ${smallname} ${${BIGNAME}_VERSION}")
-    else()
-      message(STATUS "using ${smallname} submodule ${subdir}")
-      add_subdirectory(${subdir} EXCLUDE_FROM_ALL)
-    endif()
-    if(NOT TARGET ${target})
-      add_library(${target} ALIAS ${smallname})
-    endif()
-  endif()
-endmacro()
-
-system_or_submodule(OXENC oxenc oxenc::oxenc liboxenc>=1.5.0 oxen-libquic/external/oxen-encoding)
-
-# oxen-logging
-if (NOT TARGET oxen::logging)
-    if(BUILD_STATIC_DEPS)
-        set(OXEN_LOGGING_FORCE_SUBMODULES ON CACHE INTERNAL "")
-    endif()
-    system_or_submodule(OXENLOGGING oxen-logging oxen::logging liboxen-logging>=1.2.0 oxen-libquic/external/oxen-logging)
-    add_library(oxen-logging-fmt-spdlog INTERFACE)
-    target_link_libraries(oxen-logging-fmt-spdlog INTERFACE oxen::logging)
-    if(OXENLOGGING_FOUND)
-        # If we load oxen-logging via system lib then we won't necessarily have fmt/spdlog targets,
-        # but this script will give us them:
-        include(oxen-libquic/external/oxen-logging/cmake/load_fmt_spdlog.cmake)
-        target_link_libraries(oxen-logging-fmt-spdlog INTERFACE ${OXEN_LOGGING_FMT_TARGET} ${OXEN_LOGGING_SPDLOG_TARGET})
-    endif()
-endif()
+# oxen::logging (with fmt & spdlog):
+include(oxen-libquic/external/oxen-logging/cmake/load.cmake)
 
 if(SROUTER_FULL)
-    system_or_submodule(OXENMQ oxenmq oxenmq::oxenmq liboxenmq>=1.3 oxen-mq)
+    sessiondep_or_submodule(liboxenmq 1.3 oxen-mq oxenmq::oxenmq)
 endif()
 
 set(JSON_BuildTests OFF CACHE INTERNAL "")
 set(JSON_Install OFF CACHE INTERNAL "")
-system_or_submodule(NLOHMANN nlohmann_json nlohmann_json::nlohmann_json nlohmann_json>=3.7.0 nlohmann)
+if(NOT TARGET nlohmann_json::nlohmann_json)
+    sessiondep_or_submodule(nlohmann_json 3.7.0 nlohmann nlohmann_json::nlohmann_json)
+endif()
 
 
 if(SROUTER_HIVE)
@@ -89,7 +30,7 @@ if(SROUTER_HIVE)
 endif()
 
 
-system_or_submodule(CLI11 CLI11 CLI11::CLI11 CLI11>=2.5.0 CLI11)
+sessiondep_or_submodule(CLI11 2.5.0 CLI11 CLI11::CLI11)
 
 
 if(SROUTER_PEERSTATS)
@@ -105,7 +46,7 @@ endif()
 
 
 set(LIBQUIC_BUILD_TESTS OFF CACHE BOOL "")
-system_or_submodule(OXENQUIC quic oxen::quic liboxenquic>=1.6 oxen-libquic)
+sessiondep_or_submodule(liboxenquic 1.11.0 oxen-libquic oxen::quic)
 
 
 # libcrypt defaults, only on with macos and non static linux
@@ -132,4 +73,24 @@ if(WITH_LIBCRYPT)
 else()
   # TODO static build lib crypt?
   message(STATUS "not building with libcrypt")
+endif()
+
+
+if(NOT TARGET mlkem_native::mlkem768)
+    file(GLOB_RECURSE mlkem_sources mlkem-native/mlkem/src/*.c mlkem-native/mlkem/src/*.S)
+
+    add_library(mlkem_native768 STATIC ${mlkem_sources})
+
+    target_compile_definitions(mlkem_native768 PUBLIC
+        MLK_CONFIG_NO_RANDOMIZED_API
+        MLK_CONFIG_PARAMETER_SET=768
+        MLK_CONFIG_NAMESPACE_PREFIX=sr_mlkem768
+        MLK_CONFIG_NO_SUPERCOP
+        MLK_CONFIG_USE_NATIVE_BACKEND_ARITH
+        MLK_CONFIG_USE_NATIVE_BACKEND_FIPS202
+    )
+
+    target_include_directories(mlkem_native768 PUBLIC mlkem-native/mlkem)
+
+    add_library(mlkem_native::mlkem768 ALIAS mlkem_native768)
 endif()

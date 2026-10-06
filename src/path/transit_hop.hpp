@@ -1,10 +1,8 @@
 #pragma once
 
-#include "constants/path.hpp"
 #include "contact/router_id.hpp"
 #include "hopid.hpp"
-#include "util/aligned.hpp"
-#include "util/compare_ptr.hpp"
+#include "util/time.hpp"
 
 #include <oxen/quic/connection_ids.hpp>
 
@@ -61,7 +59,7 @@ namespace srouter::path
         TransitHop() = default;
 
         // Shared secret between the client and this hop used for this hop's onion encryption
-        SharedSecret shared_secret;
+        SymmKey shared_secret;
 
         // Used by each hop to mutate the encryption nonce used for the onion encryption of a
         // datum down a path.  This isn't cryptographically necessary (the same nonce could be

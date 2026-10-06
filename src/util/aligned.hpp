@@ -1,5 +1,7 @@
 #pragma once
 
+#include "cleared.hpp"
+
 #include <oxenc/base32z.h>
 #include <oxenc/bt.h>
 #include <oxenc/bt_serialize.h>
@@ -9,11 +11,14 @@
 #include <array>
 #include <cstddef>
 #include <span>
+#include <type_traits>
 
 namespace srouter
 {
-    /// aligned buffer that is sz bytes long and aligns to the nearest Alignment
-    template <size_t sz>
+    /// aligned buffer that is sz bytes long and aligns to the nearest Alignment.  If Clearing is
+    /// true, then the underlying buffer includes a destructor that safely memzeros the value during
+    /// destruction, and is recommended when this is used to store sensitive values.
+    template <size_t sz, bool Clearing = false>
     struct alignas(8) AlignedBuffer
     {
         static_assert(sz % 8 == 0, "AlignedBuffer cannot be used with buffers that aren't a multiple of 8");
@@ -72,13 +77,13 @@ namespace srouter
             return *this;
         }
 
-        uint8_t& operator[](size_t idx)
+        std::byte& operator[](size_t idx)
         {
             assert(idx < SIZE);
             return _data[idx];
         }
 
-        const uint8_t& operator[](size_t idx) const
+        const std::byte& operator[](size_t idx) const
         {
             assert(idx < SIZE);
             return _data[idx];
@@ -86,15 +91,17 @@ namespace srouter
 
         static constexpr size_t size() { return sz; }
 
-        void Fill(uint8_t f) { _data.fill(f); }
+        void Fill(std::byte f) { _data.fill(f); }
 
-        std::array<uint8_t, SIZE>& as_array() { return _data; }
+        std::array<std::byte, SIZE>& as_array() { return _data; }
 
-        const std::array<uint8_t, SIZE>& as_array() const { return _data; }
+        const std::array<std::byte, SIZE>& as_array() const { return _data; }
 
-        uint8_t* data() { return _data.data(); }
+        std::byte* data() { return _data.data(); }
+        const std::byte* data() const { return _data.data(); }
 
-        const uint8_t* data() const { return _data.data(); }
+        unsigned char* udata() { return reinterpret_cast<unsigned char*>(data()); }
+        const unsigned char* udata() const { return reinterpret_cast<const unsigned char*>(data()); }
 
         std::span<std::byte, SIZE> span()
         {
@@ -105,48 +112,49 @@ namespace srouter
             return std::span<const std::byte, SIZE>{reinterpret_cast<const std::byte*>(_data.data()), SIZE};
         }
 
-        // Implicit conversion to span
+        // Implicit conversion to fixed size span
         operator std::span<std::byte, SIZE>() { return span(); }
-        operator std::span<std::byte>() { return span(); }
         operator std::span<const std::byte, SIZE>() const { return span(); }
-        operator std::span<const std::byte>() const { return span(); }
 
         // Shortcut for .span().first/last:
         std::span<std::byte> first(size_t n) { return span().first(n); }
+        std::span<const std::byte> first(size_t n) const { return span().first(n); }
         template <size_t N>
             requires(N <= SIZE)
         std::span<std::byte, N> first()
         {
             return span().template first<N>();
         }
+        template <size_t N>
+            requires(N <= SIZE)
+        std::span<const std::byte, N> first() const
+        {
+            return span().template first<N>();
+        }
         std::span<std::byte> last(size_t n) { return span().last(n); }
+        std::span<const std::byte> last(size_t n) const { return span().last(n); }
         template <size_t N>
             requires(N <= SIZE)
         std::span<std::byte, N> last()
         {
             return span().template last<N>();
         }
-
-        bool is_zero() const
+        template <size_t N>
+            requires(N <= SIZE)
+        std::span<const std::byte, N> last() const
         {
-            const auto* ptr = reinterpret_cast<const uint64_t*>(data());
-            for (size_t idx = 0; idx < SIZE / sizeof(uint64_t); idx++)
-            {
-                if (ptr[idx])
-                    return false;
-            }
-            return true;
+            return span().template last<N>();
         }
 
-        void zero() { _data.fill(0); }
+        void zero() { Fill(std::byte{0}); }
 
-        typename std::array<uint8_t, SIZE>::iterator begin() { return _data.begin(); }
+        typename std::array<std::byte, SIZE>::iterator begin() { return _data.begin(); }
 
-        typename std::array<uint8_t, SIZE>::iterator end() { return _data.end(); }
+        typename std::array<std::byte, SIZE>::iterator end() { return _data.end(); }
 
-        typename std::array<uint8_t, SIZE>::const_iterator begin() const { return _data.cbegin(); }
+        typename std::array<std::byte, SIZE>::const_iterator begin() const { return _data.cbegin(); }
 
-        typename std::array<uint8_t, SIZE>::const_iterator end() const { return _data.cend(); }
+        typename std::array<std::byte, SIZE>::const_iterator end() const { return _data.cend(); }
 
         bool from_base32z(std::string_view b32z)
         {
@@ -192,7 +200,7 @@ namespace srouter
 
         template <typename T>
             requires(std::derived_from<T, AlignedBuffer<T::SIZE>>)
-        static T filled(uint8_t f)
+        static T filled(std::byte f)
         {
             T ret;
             ret.Fill(f);
@@ -200,7 +208,7 @@ namespace srouter
         }
 
       private:
-        std::array<uint8_t, SIZE> _data;
+        std::conditional_t<Clearing, cleared_barray<SIZE>, std::array<std::byte, SIZE>> _data;
     };
 
     static_assert(sizeof(AlignedBuffer<32>) == 32, "AlignedBuffer should have no overhead");

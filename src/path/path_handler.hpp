@@ -9,13 +9,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <ranges>
 #include <unordered_map>
-
-namespace oxen::quic
-{
-    struct Ticker;
-}
 
 namespace srouter
 {
@@ -37,8 +33,6 @@ namespace srouter
             Router& router;
 
           protected:
-            std::shared_ptr<quic::Ticker> _path_rotater;
-
             /// flag for ::Stop()
             std::atomic<bool> _running;
 
@@ -48,6 +42,24 @@ namespace srouter
 
             int _consecutive_failures = 0;
             steady_ms _last_failure{};
+
+            // Capture a weak_ptr to this in any lambda handed to an external object that will touch
+            // handler state when it fires, and bail if it no longer locks:
+            // `[this, alive = std::weak_ptr{_alive}] { if (not alive.lock()) return; ... }`.  Path
+            // builds routinely outlive the handler that started them -- an unanswered path_build
+            // still fires its callback after BTRequestStream's 10s timeout, and SessionEndpoint
+            // destroys sessions (which are PathHandlers) whenever one closes or is replaced.
+            //
+            // Deliberately not weak_from_this(): a path build can be started from inside a subclass
+            // constructor (OutboundRelaySession's ctor looks up the remote's RC, and
+            // NodeDB::lookup_rc answers inline when the RC is already known, which ticks the session
+            // and builds), and enable_shared_from_this is not populated until the shared_ptr
+            // finishes construction, so such a guard would silently discard those responses.
+            //
+            // Session has its own canary for the same purpose; OutboundSession inherits both, which
+            // is why this one is used via the member rather than through a canary() accessor that
+            // would be ambiguous there.
+            std::shared_ptr<bool> _alive{std::make_shared<bool>(true)};
 
             using Lock_t = util::NullLock;
             mutable util::NullMutex paths_mutex;
@@ -161,11 +173,11 @@ namespace srouter
             /// build.  When the build is done it calls either path_build_succeeded or
             /// path_build_failed.  It is possible for path_build_failed to fire *before* this
             /// function returns if the given path cannot currently be built (such as when shutting
-            /// down, or if the rate limiter is hit).
+            /// down, or if the rate limiter is hit), or if the build could not be sent to the edge.
             ///
-            /// The return value is a unique id for the path that is passed into the
-            /// path_build_failed/_succeeded methods to uniquely identify the path, or 0 if the path
-            /// build is not currently possible.
+            /// Returns the path that is being built, or nullptr if the build could not be started.
+            /// A returned path is owned by this handler; it is not kept alive by the caller, and a
+            /// subsequent failure drops it.
             Path* build(
                 std::span<const RelayContact> hops, sys_ms expiry_ts = srouter::time_now_ms() + path::MAX_LIFETIME);
 
@@ -208,7 +220,10 @@ namespace srouter
             /// Takes the path build (from encode_path_build) and fires it down the path.  When the
             /// path build finishes it calls either path_build_succeeded on success, or
             /// path_build_failed on failure.
-            void send_path_build(const std::shared_ptr<Path>& new_path, int64_t id);
+            ///
+            /// Returns false if the build could not be sent at all, in which case no response is
+            /// ever coming and path_build_failed has already been called before returning.
+            bool send_path_build(const std::shared_ptr<Path>& new_path, int64_t id);
 
           public:
             // Counterpart to path_build_onion that decrypts a single path build frame; this is only

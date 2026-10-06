@@ -38,17 +38,16 @@ namespace srouter
             std::unordered_map<NetworkAddress, std::shared_ptr<session::Session>> _sessions;
             std::unordered_map<session_tag, std::shared_ptr<session::Session>> _session_tags;
 
-            session_tag last_tag = srouter::csrng();
+            session_tag last_tag = static_cast<session_tag>(srouter::csrng());
 
             // this could probably map to a pair of vectors, or pending packets could
             // be wrapped in callbacks, but for now this works
             // std::unordered_map<NetworkAddress, std::vector<IPPacket>> pending_sessions;
             // std::unordered_map<NetworkAddress, std::vector<std::function<void(bool)>>> pending_session_hooks;
 
-            ClientContact client_contact;
-            Ed25519BlindedKey cc_blind_keys;
+            std::optional<ClientContact> client_contact;
+            std::optional<Ed25519BlindedKey> cc_blind_keys;
             int cc_count = -1;
-            protocol_flag protocols;
 
             // Used for logging connected/disconnected status:
             bool connected = false;
@@ -59,7 +58,7 @@ namespace srouter
 
             std::optional<std::string_view> fetch_auth_token(const NetworkAddress& remote) const;
 
-            void close_session(std::shared_ptr<session::Session>& s, bool send_close);
+            void close_session(const std::shared_ptr<session::Session>& s, bool send_close);
 
             void on_path_build_failure(int64_t build_id, path::Path* path, bool timeout) override;
             void on_path_build_success(int64_t build_id, path::Path& p) override;
@@ -129,15 +128,24 @@ namespace srouter
             std::unordered_map<mapped_remote, uint16_t, mapped_remote::hash> _udp_client_ports;
             std::unordered_map<mapped_remote, uint16_t, mapped_remote::hash> _udp_return_ports;
 
-            // Stores any established embedded client UDP maps: {remote:port} -> {socket,cports}, so
-            // that you can safely ask for the same remote:port again and just get the existing one
-            // rather than a new listening socket.  cports is a vector of keys of _udp_client_ports,
-            // used when deleting the handle.
-            std::unordered_map<
-                mapped_remote,
-                std::pair<std::unique_ptr<quic::UDPSocket>, std::vector<mapped_remote>>,
-                mapped_remote::hash>
-                _udp_handles;
+            struct udp_handle
+            {
+                std::unique_ptr<quic::UDPSocket> socket;
+
+                // Keys of _udp_client_ports belonging to this handle, used when deleting it.
+                std::vector<mapped_remote> cports;
+
+                // How many callers currently hold this mapping.  Asking for a remote:port that is
+                // already mapped hands back the same socket rather than a new one, so the mapping
+                // outlives any single holder: it is torn down when the last one unmaps it, not the
+                // first.
+                int holders = 0;
+            };
+
+            // Stores any established embedded client UDP maps: {remote:port} -> handle, so that you
+            // can safely ask for the same remote:port again and just get the existing one rather
+            // than a new listening socket.
+            std::unordered_map<mapped_remote, udp_handle, mapped_remote::hash> _udp_handles;
 
             uint16_t _next_udp_client_port{0};
 
@@ -188,6 +196,8 @@ namespace srouter
             template <std::derived_from<session::Session> S = session::Session>
             S* get_session(const session_tag& tag) const
             {
+                if (tag == 0)  // Reserved "not a tag" value
+                    return nullptr;
                 auto it = _session_tags.find(tag);
                 if (it == _session_tags.end())
                     return nullptr;
@@ -226,6 +236,15 @@ namespace srouter
 
             void publish_client_contact(std::string_view encrypted_cc);
 
+            /// Accesses the current client contact, if we are a client, otherwise returns nullptr.
+            const ClientContact* maybe_cc() const { return client_contact ? &*client_contact : nullptr; }
+            /// Asserts that we are a client and references a reference to the CC
+            const ClientContact& cc() const
+            {
+                assert(client_contact);
+                return *client_contact;
+            }
+
             // Updates a CC cache entry if the given value is better than the one already in the
             // cache.  Returns a reference to the cache entry (which *could* be a copy of the input,
             // but also could be a previous existing entry if the existing cache value is
@@ -239,8 +258,8 @@ namespace srouter
             std::optional<ipv4> map_session_v4(const session::Session& s);
             std::optional<ipv6> map_session_v6(const session::Session& s);
 
-            void handle_session_init(std::vector<std::byte>&& payload, std::shared_ptr<path::Path> path);
-            void handle_session_init(std::vector<std::byte>&& payload, std::shared_ptr<path::TransitHop> thop);
+            void handle_session_init(std::span<const std::byte> payload, std::shared_ptr<path::Path> path);
+            void handle_session_init(std::span<const std::byte> payload, std::shared_ptr<path::TransitHop> thop);
 
             // Called on a client when we receive a session_init from another client to create an
             // InboundClientSession.  Returns nullopt if the session cannot be created, otherwise
@@ -249,7 +268,7 @@ namespace srouter
                 const NetworkAddress& initiator,
                 const HopID& remote_pivot_txid,
                 std::shared_ptr<path::Path> path,
-                const SharedSecret& session_key);
+                const SymmKey& session_key);
 
             // Called on a relay when we receive a session_init from a client to create an
             // InboundRelaySession.  Returns nullopt if the session cannot be created, otherwise
@@ -258,7 +277,7 @@ namespace srouter
                 const NetworkAddress& initiator,
                 const HopID& remote_pivot_txid,
                 std::shared_ptr<path::TransitHop> path,
-                const SharedSecret& session_key);
+                const SymmKey& session_key);
 
             // lookup SNS address to return "{pubkey}.sesh" address of a remote client
             //
@@ -288,7 +307,7 @@ namespace srouter
             // Initiates a session to the given remote client or snode address.  Calls
             // `on_attempted` when the connection is either established (immediately, if a session
             // to the target is already established) or when the connection attempt times out (the
-            // caller can check `session.is_established()` to figure out which one occured).
+            // caller can check `session.is_established()` to figure out which one occurred).
             //
             // The timeout, if omitted/nullopt, defaults to the [paths]build-timeout config option.
             //
@@ -300,8 +319,12 @@ namespace srouter
             // usage).
             //
             // This method throws *without* calling `on_attempted` if a Session cannot be attempted,
-            // such as when `remote` does not contain a valid pubkey.  If it does not throw, then it
-            // always returns a non-null shared_ptr.
+            // such as when `remote` does not contain a valid pubkey.
+            //
+            // Returns nullptr if the remote is known to be unreachable, i.e. it is a relay for
+            // which the network holds no relay contact.  `on_attempted`, if given, is still called
+            // (with a non-established session) before returning, so a caller that only watches the
+            // callback remains correct; the null return simply reports the same failure sooner.
             std::shared_ptr<session::Session> initiate_remote_session(
                 const NetworkAddress& remote,
                 std::function<void(session::Session& session)> on_attempted = nullptr,
@@ -315,6 +338,12 @@ namespace srouter
 
             session_tag next_tag();
 
+            // Paths belonging to our outbound sessions.  These are used as extra RouterID fetch
+            // sources when we do not have enough inbound paths of our own; unlike inbound paths,
+            // whose terminals we pick at random, an outbound path's terminal was chosen to reach a
+            // particular remote, so a caller should treat them as the less trustworthy source.
+            std::vector<path::Path*> outbound_session_paths() const;
+
             // UDP port mapping, primarily for embedded clients.  This starts constructing a session
             // to the given remote, starts a UDP listener on an IPv6 localhost (i.e. `[::1]`) random
             // port, and sets up the internal handling so that UDP traffic to that UDP localhost
@@ -327,9 +356,13 @@ namespace srouter
             //   desired).  Note that the session could change over time, e.g. if it is deleted by
             //   idle time out and then is re-established as a result of activity to this port.
             //
+            // Returns nullopt, without mapping a port, if the remote is known to be unreachable
+            // (see initiate_remote_session).  Mapping a port would be pointless in that case: no
+            // session can carry what gets sent to it.
+            //
             // Throws (via initiate_remote_session) if the Session could not be initiated, such as
             // when given an invalid pubkey in `remote`.
-            std::pair<uint16_t, std::shared_ptr<session::Session>> map_udp_remote_port(
+            std::optional<std::pair<uint16_t, std::shared_ptr<session::Session>>> map_udp_remote_port(
                 const NetworkAddress& remote, uint16_t port);
 
             // Removes a mapping previously established with map_udp_remote_port; this closes the

@@ -13,7 +13,7 @@ namespace srouter::dns
 
     void Unbound::ub_ctx_deleter::operator()(ub_ctx* ctx) { ub_ctx_delete(ctx); }
 
-    Unbound::Unbound(Router& router) : _loop{router.loop}
+    Unbound::Unbound(Router& router) : _loop{*router._loop}
     {
         auto* ctx = ub_ctx_create_event(_loop.get_event_base());
         if (!ctx)
