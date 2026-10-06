@@ -61,7 +61,7 @@ namespace srouter
         }
     }  // namespace detail
 
-    // Split a span into subspans.  Takes n length values and returns an array of n+1 spans (the
+    // Split a span into subspans.  Takes n length values and returns an tuple of n+1 spans (the
     // last contains everything beyond the last specified size).  Does *NOT* check length, you must
     // ensure the input is no shorter than the sum of the input sizes!
     //

@@ -1,5 +1,6 @@
 #include "address/address.hpp"
 #include "config/config.hpp"
+#include "link/endpoint.hpp"
 #include "net/id.hpp"
 #include "nodedb.hpp"
 #include "router/router.hpp"
@@ -25,22 +26,17 @@ namespace session::router
 {
     namespace log = oxen::log;
 
-    static auto make_embedded_context() { return std::make_unique<srouter::Context>(/*embedded=*/true); }
-
     SessionRouter::SessionRouter(std::string config, std::shared_ptr<oxen::quic::Loop> loop)
-        : context{make_embedded_context()}
-    {
-        context->start(srouter::Config{srouter::config::Type::EmbeddedClient, std::move(config)}, loop);
-    }
+        : context{std::make_unique<srouter::Context>(
+              /*embedded=*/true, srouter::Config{srouter::config::Type::EmbeddedClient, std::move(config)}, loop)}
+    {}
 
     SessionRouter::SessionRouter(path_ctor, const std::filesystem::path& config, std::shared_ptr<oxen::quic::Loop> loop)
-        : context{make_embedded_context()}
-    {
-        ;
-        context->start(srouter::Config{srouter::config::Type::EmbeddedClient, config}, loop);
-    }
+        : context{std::make_unique<srouter::Context>(
+              /*embedded=*/true, srouter::Config{srouter::config::Type::EmbeddedClient, config}, loop)}
+    {}
 
-    SessionRouter::SessionRouter(Network n, std::shared_ptr<oxen::quic::Loop> loop) : context{make_embedded_context()}
+    SessionRouter::SessionRouter(Network n, std::shared_ptr<oxen::quic::Loop> loop)
     {
         srouter::Config conf{srouter::config::Type::EmbeddedClient};
         switch (n)
@@ -54,14 +50,10 @@ namespace session::router
             default:
                 throw std::invalid_argument{"Unknown/unsupported network value passed to Session Router constructor"};
         }
-        context->start(std::move(conf), loop);
+        context = std::make_unique<srouter::Context>(/*embedded-*/ true, std::move(conf), loop);
     }
 
-    SessionRouter::~SessionRouter()
-    {
-        context->stop();
-        context->wait();
-    }
+    SessionRouter::~SessionRouter() {}
 
     void SessionRouter::on_connected(std::function<void()> callback, bool with_path, bool persist)
     {
@@ -73,11 +65,11 @@ namespace session::router
         context->router->on_disconnected(std::move(callback), with_path, persist);
     }
 
-    tunnel_info SessionRouter::establish_udp(
+    udp_tunnel SessionRouter::establish_udp(
         std::string_view remote,
         uint16_t dest_port,
         std::function<void(tunnel_info)> on_established,
-        std::function<void()> on_timeout)
+        std::function<void(tunnel_failure)> on_failed)
     {
         if (srouter::is_valid_sns(remote))
             throw std::invalid_argument{"establish_udp requires a network pubkey address, not an ONS/SNS addresses"};
@@ -100,14 +92,13 @@ namespace session::router
         quic::Address src{"::1"s, 0};
         quic::Address dest{"::1"s, dest_port};
 
-        auto [local_port, session] = context->router->session_endpoint().map_udp_remote_port(netaddr, dest_port);
+        auto mapped = context->router->session_endpoint().map_udp_remote_port(netaddr, dest_port);
+        if (!mapped)
+            return {};
 
-        tunnel_info ti{
-            .remote = netaddr.to_string(),
-            .remote_port = dest_port,
-            .local_port = local_port,
-            // TODO FIXME: 1200 here is just a placeholder, we should be able to pick something better!
-            .suggested_mtu = 1200};
+        auto& [local_port, session] = *mapped;
+
+        tunnel_info ti{.remote = netaddr.to_string(), .remote_port = dest_port, .local_port = local_port};
 
         if (session->is_established())
         {
@@ -116,22 +107,22 @@ namespace session::router
         }
         else if (session->is_outbound)
         {
-            if (on_established || on_timeout)
+            if (on_established || on_failed)
             {
                 auto osession = std::static_pointer_cast<srouter::session::OutboundSession>(session);
-                osession->on_established(
-                    [ti, on_established, on_timeout](const srouter::session::OutboundSession& session) {
-                        if (session.is_established())
-                        {
-                            if (on_established)
-                                on_established(ti);
-                        }
-                        else
-                        {
-                            if (on_timeout)
-                                on_timeout();
-                        }
-                    });
+                osession->on_established([ti, on_established, on_failed](
+                                             const srouter::session::OutboundSession& session) {
+                    if (session.is_established())
+                    {
+                        if (on_established)
+                            on_established(ti);
+                    }
+                    else
+                    {
+                        if (on_failed)
+                            on_failed(session.is_unreachable() ? tunnel_failure::unreachable : tunnel_failure::timeout);
+                    }
+                });
             }
         }
         else
@@ -140,30 +131,65 @@ namespace session::router
                 logcat, "Unexpected: tunnel session returned a non-established, but also non-outbound session!");
         }
 
-        return ti;
+        return udp_tunnel{*this, _alive, std::move(ti)};
     }
 
-    void SessionRouter::close_udp(std::string_view remote, uint16_t port)
+    udp_tunnel::udp_tunnel(SessionRouter& router, std::weak_ptr<void> alive, tunnel_info info)
+        : _router_alive{std::move(alive)}, _router{&router}, _info{std::move(info)}
+    {}
+
+    udp_tunnel& udp_tunnel::operator=(udp_tunnel&& other) noexcept
     {
-        srouter::NetworkAddress netaddr;
+        reset();
+        _router_alive = std::exchange(other._router_alive, {});
+        _router = std::exchange(other._router, nullptr);
+        _info = std::exchange(other._info, {});
+        return *this;
+    }
+
+    udp_tunnel::~udp_tunnel() { reset(); }
+
+    void udp_tunnel::reset()
+    {
+        if (!_router)
+            return;
+
+        // A claim can outlive the router it came from, in which case the mapping went away with it.
+        if (auto alive = _router_alive.lock())
+            _router->release_udp(_info.remote, _info.remote_port);
+
+        _router_alive.reset();
+        _router = nullptr;
+        _info = {};
+    }
+
+    void SessionRouter::release_udp(const std::string& remote, uint16_t port)
+    {
+        // Reached from ~udp_tunnel, so this must not throw.  The address came from us in the first
+        // place, so failing to parse it back would be a bug rather than bad input.
         try
         {
-            netaddr = srouter::NetworkAddress{remote};
+            srouter::NetworkAddress netaddr{remote};
+            context->router->session_endpoint().unmap_udp_remote_port(netaddr, port);
         }
         catch (const std::exception& e)
         {
-            throw std::invalid_argument{"Invalid remote address: {}"_format(e.what())};
+            log::error(logcat, "Failed to release UDP tunnel to {}:{}: {}", remote, port, e.what());
         }
-
-        context->router->session_endpoint().unmap_udp_remote_port(netaddr, port);
     }
 
-    static snode_path to_snode_path(const srouter::path::Path::Info& info)
+    static path_info to_path_info(const srouter::path::Path::Info& info)
     {
-        snode_path path;
+        path_info p;
         for (const auto& [rid, ip] : info.relays)
-            path.emplace_back(srouter::NetworkAddress{rid, false}.to_string(), ip.to_string());
-        return path;
+            p.hops.push_back({srouter::NetworkAddress{rid, false}.to_string(), ip.to_string()});
+        p.expiry = info.expiry;
+        p.latency = info.ping_mean;
+        p.jitter = info.ping_jitter;
+        p.ping_responses = info.ping_responses;
+        p.ping_timeouts = info.ping_timeouts;
+        p.ping_recent_timeouts = info.ping_recent_timeouts;
+        return p;
     }
 
     void SessionRouter::resolve(
@@ -184,7 +210,7 @@ namespace session::router
             return;
         }
 
-        context->router->loop.call([address = std::move(address),
+        context->router->_jq->call([address = std::move(address),
                                     callback = std::move(callback),
                                     &ep = context->router->session_endpoint()]() mutable {
             ep.resolve_sns(
@@ -199,7 +225,7 @@ namespace session::router
         });
     }
 
-    std::optional<snode_path> SessionRouter::get_path_for_session(std::string_view remote)
+    std::optional<path_info> SessionRouter::get_path_for_session(std::string_view remote)
     {
         srouter::NetworkAddress netaddr;
         try
@@ -212,21 +238,21 @@ namespace session::router
             return std::nullopt;
         }
 
-        return context->router->loop.call_get([&r = context->router, addr = std::move(netaddr)]() {
-            std::optional<snode_path> ret;
+        return context->router->_jq->call_get([&r = context->router, addr = std::move(netaddr)]() {
+            std::optional<path_info> ret;
             if (auto* s = r->session_endpoint().get_session(addr))
-                ret = to_snode_path(s->current_path_info());
+                ret = to_path_info(s->current_path_info());
             return ret;
         });
     }
 
     std::vector<session_path> SessionRouter::get_all_session_paths()
     {
-        return context->router->loop.call_get([&r = context->router]() {
+        return context->router->_jq->call_get([&r = context->router]() {
             std::vector<session_path> ret;
             r->session_endpoint().for_each_session(
                 [&ret](const srouter::NetworkAddress& addr, const srouter::session::Session& s) {
-                    ret.emplace_back(to_snode_path(s.current_path_info()), addr.to_string());
+                    ret.push_back({to_path_info(s.current_path_info()), addr.to_string()});
                 });
             return ret;
         });

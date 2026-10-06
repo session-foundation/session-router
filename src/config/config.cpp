@@ -7,16 +7,13 @@
 #include "definition.hpp"
 #include "ini.hpp"
 #include "path/path_handler.hpp"
+#include "session/tunnel_sizes.hpp"
 #include "util/file.hpp"
 #include "util/formattable.hpp"
 #include "util/logging/buffer.hpp"
 
 #include <filesystem>
 #include <stdexcept>
-
-#ifndef SROUTER_EMBEDDED_ONLY
-#include <oxenmq/address.h>
-#endif
 
 namespace srouter
 {
@@ -672,6 +669,31 @@ namespace srouter
                 }
             });
 
+        conf.add_options_validator([this] {
+            if (!_reserved_local_ipv4.empty())
+            {
+                if (ipv4_autoselect())
+                    throw std::invalid_argument{"[network]:mapaddr requires an IPv4 range for [network]:ifaddr"};
+
+                for (const auto& [netaddr, ip] : _reserved_local_ipv4)
+                    if (!_local_ip_net->contains(ip))
+                        throw std::invalid_argument{
+                            "Invalid [network]:mapaddr mapping: {} is not within the configured IPv4 range {}"_format(
+                                ip, *_local_ip_net)};
+            }
+            if (!_reserved_local_ipv6.empty())
+            {
+                if (ipv6_autoselect())
+                    throw std::invalid_argument{"[network]:mapaddr requires an IPv6 range for [network]:ifaddr"};
+
+                for (const auto& [netaddr, ip] : _reserved_local_ipv6)
+                    if (!_local_ipv6_net->contains(ip))
+                        throw std::invalid_argument{
+                            "Invalid [network]:mapaddr mapping: {} is not within the configured IPv6 range {}"_format(
+                                ip, *_local_ipv6_net)};
+            }
+        });
+
         conf.define_option<int>(
             "network",
             "expired-address-cache",
@@ -1064,6 +1086,34 @@ namespace srouter
                         "[bind]:inbound and [bind]:IP and use only one [bind]:listen"};
                 listen_addr = parse_addr_for_link(arg);
             });
+
+        conf.define_option<int>(
+            "bind",
+            "max-udp-payload",
+            Default{
+                conf.type == config::Type::EmbeddedClient ? static_cast<int>(session::UDP_TUNNEL_UNSPLIT_LINK_PAYLOAD)
+                                                          : -1},
+            Comment{
+                "Caps the UDP payload size (not the MTU) of connections to relays: path MTU discovery",
+                "probes for the largest size that works, up to this cap.  -1 means no cap; otherwise the",
+                "value must be at least 1200, the QUIC minimum.",
+                "",
+                "Relays and full clients default to no cap.  Embedded clients default to {}: the split"_format(
+                    session::UDP_TUNNEL_UNSPLIT_LINK_PAYLOAD),
+                "threshold for tunnelled QUIC connections at the 1200 QUIC minimum, i.e. the smallest size",
+                "that carries each of their packets without splitting it, and a conservative cap for",
+                "clients that change networks.",
+            },
+            [this](int arg) {
+                if (arg == -1)
+                    max_udp_payload.reset();
+                else if (arg < static_cast<int>(quic::MIN_UDP_PAYLOAD))
+                    throw std::invalid_argument{
+                        "Invalid [bind]:max-udp-payload {}: must be -1 (no cap) or at least {}"_format(
+                            arg, quic::MIN_UDP_PAYLOAD)};
+                else
+                    max_udp_payload = static_cast<size_t>(arg);
+            });
     }
 
     void ApiConfig::define_config_options(ConfigDefinition& conf)
@@ -1151,9 +1201,14 @@ namespace srouter
                 "    rpc=tcp://127.0.0.1:5678",
             },
             [this](std::string arg) {
-#ifndef SROUTER_EMBEDDED_ONLY
-                oxenmq::address test_valid{arg};
-#endif
+                // The full library installs a stricter oxenmq-based validator (see
+                // config::install_full_config_validators); embedded/core-only builds fall back to a
+                // cheap scheme check so we don't pull oxenmq into the core config library.
+                if (config::oxend_rpc_addr_validator)
+                    config::oxend_rpc_addr_validator(arg);
+                else if (arg.find("://") == std::string::npos)
+                    throw std::invalid_argument{
+                        "Invalid [oxend]:rpc address '{}': expected a scheme such as ipc:// or tcp://"_format(arg)};
                 rpc_addr = std::move(arg);
             });
     }
@@ -1331,7 +1386,7 @@ namespace srouter
             Comment{
                 "Number of local paths that Session Router maintains for both network reachability (i.e. remote",
                 "clients connecting to this instance) and network communication such as looking up",
-                "client lto maintain for network reachability and for general network requests",
+                "client records and updating network state",
                 "",
                 "This value does NOT apply to paths that are built to reach external clients or relays.",
             },
@@ -1555,11 +1610,6 @@ namespace srouter
     Config::Config(config::Type type, std::string ini, std::filesystem::path conf_dir, std::string config_for_debug)
         : type{type}, defs{type, std::move(conf_dir)}, parser{std::move(config_for_debug)}
     {
-#ifdef SROUTER_EMBEDDED_ONLY
-        if (type != Type::EmbeddedClient)
-            throw std::runtime_error{
-                "This Session Router build only supports embedded clients, not {}"_format(to_string(type))};
-#endif
         for (ConfigBase* c : std::initializer_list<ConfigBase*>{
                  &router, &exit, &network, &paths, &dns, &links, &api, &oxend, &bootstrap, &logging})
             c->define_config_options(defs);
