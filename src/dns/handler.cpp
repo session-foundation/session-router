@@ -13,10 +13,6 @@
 
 namespace srouter::dns
 {
-#ifdef SROUTER_EMBEDDED_ONLY
-    static_assert(false, "dns::RequestHandler requires a full lokinet build!");
-#endif
-
     namespace
     {
         auto logcat = log::Cat("dns");
@@ -134,11 +130,25 @@ namespace srouter::dns
 
         // is this firefox looking for their backdoor record?
         if (q.name() == "use-application-dns.net")
+        {
             // yea it is, let's turn off DoH because god is dead.
+            add_nx_soa(msg, "use-application-dns.net", 30s);
             return reply(msg.nxdomain().encode(tcp));  // press F to pay respects and send it back where it came from
+        }
 
         // Not for us, so forward to upstream handler
         forward(std::move(msg), std::move(reply), tcp);
+    }
+
+    void RequestHandler::add_nx_soa(Message& m, std::string domain, std::chrono::seconds ttl)
+    {
+        m.authorities.push_back(std::make_unique<RR_SOA>(
+            domain,
+            10min /* ttl of the SOA record itself */,
+            "localhost.sesh",
+            "sr.localhost.sesh",
+            _soa_serial++,
+            ttl));
     }
 
     bool RequestHandler::handle_local(ReplyCallback& reply, Message& msg, std::string qname, bool tcp)
@@ -255,7 +265,7 @@ namespace srouter::dns
                  cname_only = q.qtype == dns::RRType::CNAME,
                  tcp](
                     std::optional<NetworkAddress> maybe_netaddr,
-                    bool /*assertive*/,
+                    bool assertive,
                     std::chrono::milliseconds ttl) mutable {
                     auto& msg = *msg_ptr;
                     msg.set_rr_name(lookup);
@@ -264,7 +274,7 @@ namespace srouter::dns
                         auto target = maybe_netaddr->to_string();
                         msg.add_cname_reply(target, std::chrono::floor<std::chrono::seconds>(ttl));
                         if (cname_only)
-                            return;
+                            return reply(msg.encode(tcp));
                         auto qname = sub.empty() ? target : "{}.{}"_format(fmt::join(sub, "."), target);
                         msg.set_rr_name(qname);
                         if (!handle_local(reply, msg, std::move(qname), tcp))
@@ -275,10 +285,10 @@ namespace srouter::dns
                         }
                         return;
                     }
-                    // TODO FIXME: if `assertive` is true then we can provide a TTL for this failure
-                    // (via an SOA authority record).  (When not assertive we shouldn't do so,
-                    // because not having an SOA TTL means a downstream recursive resolver shouldn't
-                    // cache the negative response).
+
+                    if (assertive)
+                        add_nx_soa(msg, "loki", std::chrono::floor<std::chrono::seconds>(ttl));
+
                     reply(msg.nxdomain().encode(tcp));
                 });
             return true;
@@ -302,7 +312,10 @@ namespace srouter::dns
                         fmt::join(rc->version(), "."), rc->addr(), rc->timestamp().time_since_epoch().count()));
                 }
                 else
+                {
+                    add_nx_soa(msg, std::string{RELAY_TLD}, 5s);
                     msg.nxdomain();
+                }
             }
 
             // TXT on path.PUBKEY.{sesh,snode} returns the current path info to that node, if a
@@ -337,11 +350,16 @@ namespace srouter::dns
                 else
                 {
                     log::warning(logcat, "Failed to parse network address {}.{} for path query", hostname, tld);
+                    // If this name was invalid, allow the NXDOMAIN to be cached:
+                    add_nx_soa(msg, tld, 30s);
                     msg.nxdomain();
                 }
             }
             else
+            {
+                add_nx_soa(msg, tld, 30s);
                 msg.nxdomain();
+            }
             reply(msg.encode(tcp));
             return true;
         }
@@ -377,23 +395,45 @@ namespace srouter::dns
                         if (auto v4_addr = tun.map4(*maybe_netaddr); v4_addr)
                             msg.add_reply(*v4_addr);
                         else
+                        {
+                            // We ran out of local IPv4s, which is a local failure rather than
+                            // anything to do with the name, and could succeed later:
                             log::warning(logcat, "IPv4 mapping requested for {} failed.", *maybe_netaddr);
+                            msg.servfail();
+                        }
                     }
-                    // else they requested A *not* using the magic ipv4 subdomain, so we only have
-                    // AAAA to offer and thus we return a reply without an answer record (which is
-                    // the proper DNS way to say "something exists at this address, but not with the
-                    // type you requested requested", as opposed to this nx_reply below, which means
-                    // "this record does not exist").
+                    else
+                    {
+                        // They requested A *not* using the magic ipv4 subdomain, so we only have
+                        // AAAA to offer and thus we return a reply without an answer record (which
+                        // is the proper DNS way to say "something exists at this address, but not
+                        // with the type you requested", as opposed to the nxdomain below, which
+                        // means "this record does not exist" and would stop a client from going on
+                        // to ask for the AAAA that we *can* answer).
+                        //
+                        // In order for this NODATA result to be properly cacheable, we need an SOA
+                        // record included.  It'll also never work in the future, so we can use a
+                        // relatively longer negative TTL via the SOA.
+                        msg.add_nodata_reply();
+                        add_nx_soa(msg, tld, 5min);
+                    }
                 }
                 else
+                {
+                    // We failed to initiate a sesssion for some reason, which likely means there's
+                    // something invalid in what you requested, so make this response authoritative
+                    // and cacheable.
+                    add_nx_soa(msg, tld, 15s);
                     msg.nxdomain();
+                }
                 reply(msg.encode(tcp));
 
                 return true;
             }
 
             log::warning(logcat, "DNS query failure: '{}' is not a valid Session Router name or address", qname);
-            reply(msg.encode(tcp));
+            add_nx_soa(msg, tld, 30s);
+            reply(msg.nxdomain().encode(tcp));
             return true;
         }
 
@@ -408,11 +448,22 @@ namespace srouter::dns
                         const std::optional<ClientContact>& cc) mutable {
                         if (cc)
                         {
+                            bool found = false;
                             for (const auto& srv : cc->SRVs())
                                 if (srv.service == sub[0] && srv.proto == sub[1])
+                                {
                                     msg->add_reply(srv);
+                                    found = true;
+                                }
+
+                            // The contact exists, it just doesn't offer the requested
+                            // service/proto, which is a NODATA reply rather than a name failure.
+                            if (!found)
+                                msg->add_nodata_reply();
                         }
                         else
+                            // Re-trying the request could initiate a new lookup, so *don't* put an
+                            // SOA on this so that the NACK isn't cached.
                             msg->nxdomain();
 
                         reply(msg->encode(tcp));
@@ -423,6 +474,7 @@ namespace srouter::dns
 
         // If we got through everything above without answering then they requested something weird
         // (unhandled RR type, perhaps) and so let's just give an NXDOMAIN back:
+        add_nx_soa(msg, tld, 30s);
         reply(msg.nxdomain().encode(tcp));
         return true;
     }
@@ -444,7 +496,73 @@ namespace srouter::dns
         if (mapped)
             msg.add_ptr_reply(mapped->to_string());
         else
+        {
+            // DNS NXDOMAIN records aren't cacheable unless they also have a pseudo-TTL, but there
+            // is no direct TTL for does-not-exist: instead it is carried in an SOA record, so make
+            // one of those here with a few seconds TTL so that it is (briefly) cacheable, and so
+            // that it not currently existing is treated as an authoritative response.
+
+            std::string auth_name;
+            if (auto* addr4 = std::get_if<ipv4>(&*ip))
+            {
+                auto net = _router.tun_endpoint()->get_ipv4_network().to_range();
+
+                // We were asked for A.B.C.D, and so in the SOA we need to indicate what we are
+                // authoritative over.  For a /8, /16, or /24 this is easy, just A.in-addr.arpa or
+                // B.A.in-addr.arpa or C.B.A.in-addr.arpa but for, say, a /18 this is more
+                // complicated: we need to round up the netmask to the next multiple of 8
+                // (effectively shrinking the network size) and then return SOA for that.
+                //
+                // For example, if we are responsible for 10.1.0.0/18 that means 10.1.0.* through
+                // 10.1.63.* but not (e.g.) 10.1.65.*, and so we need to "round up" the netmask to
+                // /24 and then assert authority over the /24 that included the asked for record.
+                // (And so technically we could have 64 different SOA records, but that's okay
+                // because we produce them on demand).
+
+                uint8_t mask_up = (std::clamp<uint8_t>(net.mask, 1, 32) + 7) / 8 * 8;
+                assert(mask_up % 8 == 0);
+
+                uint32_t soa_addr = (*addr4 / mask_up).ip.addr >> (32 - mask_up);
+                for (uint8_t m = mask_up; m > 0; m -= 8)
+                {
+                    fmt::format_to(std::back_inserter(auth_name), "{}.", soa_addr % 256);
+                    soa_addr >>= 8;
+                }
+                auth_name += ".in-addr.arpa";
+            }
+            else
+            {
+                auto& addr6 = std::get<ipv6>(*ip);
+                auto net = _router.tun_endpoint()->get_ipv6_network().to_range();
+
+                // Similar to the above, but everything operators on 4-bit hex nybbles rather than 8-bit
+                // integers.  e.g.
+                // abcd:234::7 is 7.0.0.0........0.4.3.2.0.d.c.b.a
+                // and so we have to do the same SOA subdivision (basically our local range netmask
+                // might not be a multiple of 4).
+                uint8_t mask_up = (std::clamp<uint8_t>(net.mask, 1, 128) + 3) / 4 * 4;
+                assert(mask_up % 4 == 0);
+
+                // Rather than calculating this with lots of bit fiddling (complicated by the fact
+                // that we need to store the address in two uint64_ts), instead just cheat by using
+                // a string representation.  Probably less efficient, but this is not a hot loop
+                // path.
+                auto soa_base = (addr6 / mask_up).ip;
+
+                // Start with a full, 32-digit raw hex representation of the ipv6 addr (not the
+                // usual notation with :, just raw, full width hex digits):
+                auto full = fmt::format("{:016x}{:016x}", soa_base.hi, soa_base.lo);
+
+                // chop the netmasked hex digits off the end:
+                full.resize(mask_up / 4);
+
+                // now just reverse the remaining hex digits and join with .'s and the suffix:
+                auth_name = fmt::format("{}.ip6.arpa", fmt::join(full.rbegin(), full.rend(), "."));
+            }
+
             msg.nxdomain();
+            add_nx_soa(msg, std::move(auth_name), 5s);
+        }
 
         reply(msg.encode(tcp));
 

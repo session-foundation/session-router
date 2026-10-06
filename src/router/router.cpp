@@ -1,13 +1,11 @@
 #include "router.hpp"
 
 #include "config/config.hpp"
-#include "consensus/reachability_testing.hpp"
 #include "constants/platform.hpp"
 #include "constants/proto.hpp"
 #include "constants/version.hpp"
 #include "contact/contactdb.hpp"
 #include "crypto/crypto.hpp"
-#include "dns/listener.hpp"
 #include "link/link_manager.hpp"
 #include "nodedb.hpp"
 #include "util/formattable.hpp"
@@ -21,15 +19,6 @@
 #include <oxen/log.hpp>
 
 #include <chrono>
-
-#ifndef SROUTER_EMBEDDED_ONLY
-#include "handlers/tun.hpp"
-#include "rpc/oxend_rpc.hpp"
-#include "rpc/rpc_server.hpp"
-
-#include <oxenmq/oxenmq.h>
-#endif
-
 #include <cstdlib>
 #include <memory>
 #include <stdexcept>
@@ -51,52 +40,58 @@ namespace srouter
         Config conf, std::shared_ptr<quic::Loop> loop, std::shared_ptr<vpn::Platform> vpnPlatform, std::promise<void> p)
         : _config{std::move(conf)},
           _loop{std::move(loop)},
+          _jq{std::make_unique<quic::JobQueue>(*_loop)},
           _vpn{std::move(vpnPlatform)},
           _close_promise{std::move(p)},
           _contact_db{std::make_unique<ContactDB>(*this)},
           _last_tick{}
     {
-#ifndef SROUTER_EMBEDDED_ONLY
-        // Not actually shared, but unique_ptr would require destructor visibility which
-        // embedded-only won't have:
-        _omq = std::make_shared<oxenmq::OxenMQ>();
-        // for oxend, so we don't close the connection when syncing the registered relay (which can
-        // exceed the defaut 1MB limit).
-        _omq->MAX_MSG_SIZE = -1;
-
-        if (is_service_node)
-            _router_testing = std::make_shared<consensus::reachability_testing>(*this);
-#endif
+        // Full builds install the rpc backend (srouter::full::initialize); in embedded/core-only
+        // builds rpc_backend is null and these stay null (the relay/rpc paths never run).
+        if (rpc_backend)
+        {
+            _omq = rpc_backend->make_omq();
+            if (is_service_node)
+                _router_testing = rpc_backend->make_reachability(*this);
+        }
 
         init_logging();
 
-        _loop->call_get([this] {
+        _jq->call_get([this] {
             log::debug(logcat, "Inside router loop, initializing router");
             configure();
             start();
         });
     }
 
-    // Default, but we define it here because some of the unique_ptrs are for forward-declared types
-    // in router.hpp which aren't available for destruction, but are available here.
-    Router::~Router() = default;
+    // Out-of-line because some of the unique_ptrs are for forward-declared types in router.hpp which
+    // aren't available for destruction, but are available here.
+    //
+    // Stopping the queues has to happen here, before any member is destroyed: they own every timer
+    // and pending job in the router, all of which reference members that are about to go away.  (The
+    // queues themselves are destroyed far too late for this -- they are declared near the top of
+    // Router so that components can use them during construction, which makes them almost the last
+    // things to die.)
+    Router::~Router()
+    {
+        _jq->stop();
+        disk_jq.stop();
+    }
 
-    void Router::start_tickers()
+    void Router::start_timers()
     {
         if (_tun)
             _tun->start_poller();
 
-#ifndef SROUTER_EMBEDDED_ONLY
         if (!embedded())
-            _service_stat_ticker = _loop->call_every(
-                SERVICE_MANAGER_REPORT_INTERVAL, []() { sys::service_manager->report_periodic_stats(); });
-#endif
+            _service_stat_timer = _jq->add_timer(SERVICE_MANAGER_REPORT_INTERVAL, [this]() {
+                sys::service_manager->report_periodic_stats(status_line());
+            });
 
         _node_db->start();
-        _contact_db->start_tickers();
-        _link_endpoint->start_tickers();
+        _contact_db->start_timers();
+        _link_endpoint->start_timers();
 
-#ifndef SROUTER_EMBEDDED_ONLY
         if (is_service_node)
         {
             _oxend->start_pings();
@@ -111,17 +106,16 @@ namespace srouter
                 delay += RelayContact::MIN_GOSSIP_RC_AGE;
             }
             log::debug(logcat, "Delaying initial RC broadcast for {}", delay);
-            loop.call_later(delay, [this] {
+            _jq->call_later(delay, [this] {
                 regenerate_rc();
-                log::debug(logcat, "Starting RC regen ticker");
-                _gossip_ticker = loop.call_every(RC_UPDATE_INTERVAL, [this] { regenerate_rc(); });
+                log::debug(logcat, "Starting RC regen timer");
+                _gossip_timer = _jq->add_timer(RC_UPDATE_INTERVAL, [this] { regenerate_rc(); });
             });
 
             if (not _config.oxend.disable_testing)
                 _router_testing->start();
         }
         else
-#endif
         {
             // Resolve needed ONS values now that we have the necessary things prefigured
             _session_endpoint->resolve_sns_mappings();
@@ -133,7 +127,6 @@ namespace srouter
     void Router::fetch_snode_keys()
     {
         assert(is_service_node);
-#ifndef SROUTER_EMBEDDED_ONLY
 
         our_rc_file = _config.router.data_dir / our_rc_filename;
 
@@ -164,7 +157,6 @@ namespace srouter
                     throw;
             }
         }
-#endif
     }
 
     void Router::init_logging()
@@ -206,12 +198,10 @@ namespace srouter
                 log::set_level(log_global, log::Level::info);
         });
 
-#ifndef SROUTER_EMBEDDED_ONLY
         // re-add rpc log sink if rpc enabled, else free it
         if (_config.api.enable_rpc_server and srouter::logRingBuffer)
             log::add_sink(srouter::logRingBuffer, srouter::log::DEFAULT_PATTERN_MONO);
         else
-#endif
             srouter::logRingBuffer.reset();
     }
 
@@ -371,44 +361,45 @@ namespace srouter
                 netconf._if_name = net()->find_free_tun(suggest);
             }
 
-            if (!(netconf._local_ip_net && netconf._local_ip_net->ip.addr))
+            if (netconf.ipv4_autoselect())
             {
-                // If we are running as a service node *and* don't have an explicit local ip range
-                // set, then we introduce a small random delay here in startup, to help avoid cases
-                // where multiple session-routers start at the same time (e.g. in a multi-SN setup)
-                // and race to assign the same "free" IP range on the tun device, but end up with
-                // duplicate ranges on multiple tun devices.  We detect (and abort startup) if that
-                // happens, but the extra sleep here spaces them out to lower the chance of hitting
-                // that.
-                if (is_service_node)
-                    std::this_thread::sleep_for(
-                        uniform_duration_distribution<std::chrono::nanoseconds>{0ms, 25ms}(csrng));
+                if (!netconf._reserved_local_ipv4.empty())
+                    throw std::runtime_error{"[network]:mapaddr cannot be used with automatic IPv4 range selection"};
+                log::info(logcat, "Session Router IPv4 local network will be auto-selected");
 
-                if (auto maybe = net()->find_free_ipv4_net(netconf._local_ip_net ? netconf._local_ip_net->mask : 16))
-                    netconf._local_ip_net = std::move(*maybe);
-                else
-                    throw std::runtime_error("cannot find free IPv4 address range!");
+                if (!netconf._local_ip_net)
+                    netconf._local_ip_net.emplace().mask = 16;
             }
-            log::info(logcat, "Session Router IPv4 local network is {}", *netconf._local_ip_net);
-
-            if (!netconf._local_ipv6_net || (!netconf._local_ipv6_net->ip.hi && !netconf._local_ipv6_net->ip.lo))
+            else
             {
-                if (auto maybe =
-                        net()->find_free_ipv6_net(netconf._local_ipv6_net ? netconf._local_ipv6_net->mask : 64))
-                    netconf._local_ipv6_net = std::move(*maybe);
-                else
-                    throw std::runtime_error("cannot find free IPv6 address range!");
-            }
-            log::info(logcat, "Session Router IPv6 local network is {}", *netconf._local_ipv6_net);
+                assert(netconf._local_ip_net);
+                log::info(logcat, "Session Router IPv4 local network is {}", *netconf._local_ip_net);
 
-            // Make sure any reserved addresses are within our local network range:
-            std::erase_if(netconf._reserved_local_ipv4, [&netconf](const auto& addr_ip) {
-                return !netconf._local_ip_net->contains(addr_ip.second);
-            });
-            if (netconf._local_ipv6_net)
+                // Config should have already verified this, but just in case:
+                std::erase_if(netconf._reserved_local_ipv4, [&netconf](const auto& addr_ip) {
+                    return !netconf._local_ip_net->contains(addr_ip.second);
+                });
+            }
+
+            if (netconf.ipv6_autoselect())
+            {
+                if (!netconf._reserved_local_ipv6.empty())
+                    throw std::runtime_error{"[network]:mapaddr cannot be used with automatic IPv4 range selection"};
+                log::info(logcat, "Session Router IPv6 local network will be auto-selected");
+
+                if (!netconf._local_ipv6_net)
+                    netconf._local_ipv6_net.emplace().mask = 64;
+            }
+            else
+            {
+                assert(netconf._local_ipv6_net);
+                log::info(logcat, "Session Router IPv6 local network is {}", *netconf._local_ipv6_net);
+
+                // Config should have already verified this, but just in case:
                 std::erase_if(netconf._reserved_local_ipv6, [&netconf](const auto& addr_ip) {
                     return !netconf._local_ipv6_net->contains(addr_ip.second);
                 });
+            }
         }
 
         if (not is_service_node)
@@ -453,10 +444,8 @@ namespace srouter
     void Router::configure()
     {
         log::trace(logcat, "{} called", __PRETTY_FUNCTION__);
-#ifndef SROUTER_EMBEDDED_ONLY
         if (!embedded())
             sys::service_manager->starting();
-#endif
 
         if (_config.exit.exit_enabled and is_service_node)
             throw std::runtime_error{
@@ -473,29 +462,29 @@ namespace srouter
 
         log::info(log_global, "Operating as a Session Router {}", is_service_node ? "relay (service node)" : "client");
 
-#ifndef SROUTER_EMBEDDED_ONLY
-        if (is_service_node)
+        if (rpc_backend)
         {
-            log::debug(logcat, "Starting oxend RPC client");
-            _oxend = std::make_shared<rpc::OxendRPC>(*_omq, *this);
-        }
+            if (is_service_node)
+            {
+                log::debug(logcat, "Starting oxend RPC client");
+                _oxend = rpc_backend->make_oxend(*this, *_omq);
+            }
 
-        if (_config.api.enable_rpc_server)
-        {
-            log::debug(logcat, "Starting RPC server");
-            //
-            _rpc_server = std::make_shared<rpc::RPCServer>(*_omq, *this);
-        }
+            if (_config.api.enable_rpc_server)
+            {
+                log::debug(logcat, "Starting RPC server");
+                _rpc_server = rpc_backend->make_rpc_server(*this, *_omq);
+            }
 
-        log::debug(logcat, "Starting OMQ server");
-        _omq->start();
+            log::debug(logcat, "Starting OMQ server");
+            rpc_backend->start_omq(*_omq);
 
-        if (is_service_node)
-        {
-            log::debug(logcat, "Connecting to oxend @ {}", _config.oxend.rpc_addr);
-            _oxend->connect_async(oxenmq::address(_config.oxend.rpc_addr));
+            if (is_service_node)
+            {
+                log::debug(logcat, "Connecting to oxend @ {}", _config.oxend.rpc_addr);
+                _oxend->connect_async(_config.oxend.rpc_addr);
+            }
         }
-#endif
 
         log::debug(logcat, "Initializing key manager");
 
@@ -510,7 +499,6 @@ namespace srouter
 
         _node_db = std::make_unique<NodeDB>(*this);
 
-#ifndef SROUTER_EMBEDDED_ONLY
         if (is_service_node)
         {
             // Wait, synchronously, for the oxend SN list update, for up to 10s.  If we still don't
@@ -538,7 +526,6 @@ namespace srouter
             if (fallback)
                 _node_db->load_registered_relays_fallback();
         }
-#endif
 
         _session_endpoint = std::make_unique<handlers::SessionEndpoint>(*this);
 
@@ -548,52 +535,21 @@ namespace srouter
 
         if (!embedded())
         {
-#ifdef SROUTER_EMBEDDED_ONLY
-            log::critical(logcat, "This Session Router build only supports embedded configurations!");
-            throw std::runtime_error{"This Session Router build only supports embedded configurations!"};
-#else
             log::debug(logcat, "Initializing TUN device");
-            _tun = _loop->make_shared<handlers::TunEndpoint>(*this);
+            _tun = rpc_backend->make_tun(*this);
+
+            log::info(logcat, "Session Router IPv4 local network is {}", _tun->get_ipv4_network());
+            log::info(logcat, "Session Router IPv6 local network is {}", _tun->get_ipv6_network());
 
             // only (full) clients should have DNS, relays have no need for it
             if (!is_service_node)
-            {
-                auto& dns_bind = config().dns._listen_addrs;
-                if (dns_bind.empty())
-                {
-                    // This configuration is allowed (a service-only client might use it), although a bit unusual
-                    log::warning(
-                        logcat, "[dns]:listen is empty: DNS disabled.  Making outbound paths will not be possible");
-                }
-                else
-                {
-                    try
-                    {
-                        for (const auto& addr : dns_bind)
-                        {
-                            if (!_dns)
-                                _dns = _loop->make_shared<dns::Listener>(*this, addr);
-                            else
-                                _dns->listen(loop, addr);
-
-                            log::info(log_global, "DNS listening on {} port {}", addr.host(), _dns->last_port);
-                        }
-                    }
-                    catch (const std::exception& e)
-                    {
-                        log::error(
-                            logcat, "Failed to initialize DNS listener on {}: {}", fmt::join(dns_bind, ","), e.what());
-                        throw;
-                    }
-                }
-            }
+                _dns = rpc_backend->make_dns(*this);
 
             log::info(
                 log_global,
                 "Session Router internal network: {} on device {}",
                 _tun->get_ipv4_network(),
                 _tun->get_if_name());
-#endif
         }
         else
             log::debug(logcat, "Not initializing TUN device; running as an embedded client");
@@ -634,7 +590,7 @@ namespace srouter
         }
 
         RelayContact rc{*this};
-        if (_node_db->put_rc(std::move(rc)))
+        if (auto [stored, gossip] = _node_db->put_rc(std::move(rc)); gossip)
         {
             auto* rc = _node_db->get_rc(id());
             assert(rc);
@@ -718,7 +674,6 @@ namespace srouter
     void Router::_relay_tick([[maybe_unused]] sys_ms now)
     {
         assert(_config.type == config::Type::Relay);
-#ifndef SROUTER_EMBEDDED_ONLY
         log::trace(logcat, "{} called", __PRETTY_FUNCTION__);
 
         auto steady_now = steady_now_ms();
@@ -756,7 +711,6 @@ namespace srouter
         }
 
         path_context.expire_hops(now);
-#endif
     }
 
     void Router::_client_tick(sys_ms now)
@@ -847,7 +801,7 @@ namespace srouter
             if (_config.network.save_profiles)
             {
                 log::debug(logcat, "Router profile saving enabled");
-                _router_profiling.start_save_ticker(*this);
+                _router_profiling.start_save_timer(*this);
             }
         }
         else
@@ -858,15 +812,13 @@ namespace srouter
         }
 
         log::debug(logcat, "Starting Router main tick interval");
-        _loop_ticker = _loop->call_every(ROUTER_TICK_INTERVAL, [this] { tick(); });
+        _tick_timer = _jq->add_timer(ROUTER_TICK_INTERVAL, [this] { tick(); });
 
-        start_tickers();
+        start_timers();
         _is_running = true;
 
-#ifndef SROUTER_EMBEDDED_ONLY
         if (!embedded())
             srouter::sys::service_manager->ready();
-#endif
 
         log::info(
             log_global,
@@ -881,18 +833,18 @@ namespace srouter
 
     bool Router::is_edge_connected() const
     {
-        return loop.call_get([this] { return _is_edge_connected; });
+        return _jq->call_get([this] { return _is_edge_connected; });
     }
     bool Router::is_path_connected() const
     {
-        return loop.call_get([this] { return _is_edge_connected && _has_established_paths; });
+        return _jq->call_get([this] { return _is_edge_connected && _has_established_paths; });
     }
 
     void Router::on_connected(std::function<void()> callback, bool with_paths, bool persistent)
     {
         if (!callback)
             return;
-        loop.call([this, with_paths, callback = std::move(callback), persistent] {
+        _jq->call([this, with_paths, callback = std::move(callback), persistent] {
             bool fire_now = _is_edge_connected && (_has_established_paths || !with_paths);
             if (fire_now)
                 try_calling(logcat, callback);
@@ -906,7 +858,7 @@ namespace srouter
     {
         if (!callback)
             return;
-        loop.call([this, callback = std::move(callback), persistent, with_paths] {
+        _jq->call([this, callback = std::move(callback), persistent, with_paths] {
             bool fire_now = !_is_edge_connected || (with_paths && !_has_established_paths);
             if (fire_now)
                 try_calling(logcat, callback);
@@ -931,7 +883,7 @@ namespace srouter
 
     void Router::on_edge_conn_change()
     {
-        assert(loop.inside());
+        assert(_loop->inside());
 
         int conns = link_endpoint().num_relay_conns();
         if (conns == 0 and _is_edge_connected)
@@ -997,10 +949,8 @@ namespace srouter
 
     void Router::on_test_ping()
     {
-#ifndef SROUTER_EMBEDDED_ONLY
         if (_router_testing)
             _router_testing->incoming_ping();
-#endif
     }
 
     void Router::stop()
@@ -1019,8 +969,7 @@ namespace srouter
         if (_is_stopping.exchange(true))
             return;  // Lost a race with something else trying to stop
 
-        _loop->call([this] {
-#ifndef SROUTER_EMBEDDED_ONLY
+        _jq->call([this] {
             if (!embedded())
             {
                 log::debug(logcat, "stopping service manager...");
@@ -1029,40 +978,37 @@ namespace srouter
 
             if (_router_testing)
                 _router_testing->stop();
-#endif
 
             _session_endpoint->stop(true);
 
             if (not is_service_node)
-                _router_profiling.stop_save_ticker();
+                _router_profiling.stop_save_timer();
 
             log::debug(logcat, "closing all connections");
             _link_manager->stop();
 
-#ifndef SROUTER_EMBEDDED_ONLY
             if (_dns)
                 _dns.reset();
 
             if (_tun)
                 _tun->stop();
-#endif
 
-            auto rv = _loop_ticker->stop();
-            log::debug(logcat, "router loop ticker stopped {}successfully!", rv ? "" : "un");
-            _loop_ticker.reset();
+            auto rv = _jq->remove(_tick_timer);
+            log::debug(logcat, "router tick timer stopped {}successfully!", rv ? "" : "un");
+            _tick_timer = {};
 
-            if (_service_stat_ticker)
+            if (_service_stat_timer)
             {
-                rv = _service_stat_ticker->stop();
-                log::debug(logcat, "service stat ticker stopped {}successfully!", rv ? "" : "un");
-                _service_stat_ticker.reset();
+                rv = _jq->remove(_service_stat_timer);
+                log::debug(logcat, "service stat timer stopped {}successfully!", rv ? "" : "un");
+                _service_stat_timer = {};
             }
 
-            if (_reachability_ticker)
+            if (_gossip_timer)
             {
-                log::debug(logcat, "clearing reachability ticker...");
-                _reachability_ticker->stop();
-                _reachability_ticker.reset();
+                log::debug(logcat, "clearing RC regen timer...");
+                _jq->remove(_gossip_timer);
+                _gossip_timer = {};
             }
 
             log::debug(logcat, "stopping nodedb events");
@@ -1094,29 +1040,23 @@ namespace srouter
 
     std::pair<std::optional<NetworkAddress>, bool> Router::reverse_lookup(const ipv4& addr) const
     {
-#ifndef SROUTER_EMBEDDED_ONLY
         if (_tun)
             return _tun->reverse_lookup(addr);
-#endif
         return {std::nullopt, false};
     }
 
     std::pair<std::optional<NetworkAddress>, bool> Router::reverse_lookup(const ipv6& addr) const
     {
-#ifndef SROUTER_EMBEDDED_ONLY
         if (_tun)
             return _tun->reverse_lookup(addr);
-#endif
         return {std::nullopt, false};
     }
 
     const srouter::net::Platform* Router::net() const
     {
-#ifndef SROUTER_EMBEDDED_ONLY
-        if (!embedded())
-            return srouter::net::Platform::Default_ptr();
-#endif
-        return nullptr;
+        if (embedded())
+            return nullptr;
+        return srouter::net::native_net_platform;
     }
 
 }  // namespace srouter

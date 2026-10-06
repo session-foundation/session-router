@@ -22,7 +22,6 @@
 #include <oxenc/base32z.h>
 
 #include <chrono>
-#include <concepts>
 #include <memory>
 #include <random>
 
@@ -31,27 +30,24 @@ namespace srouter::handlers
     static auto logcat = log::Cat("session_ep");
 
     SessionEndpoint::SessionEndpoint(Router& r)
-        : path::
-              PathHandler{r, r.config().paths.inbound_paths + r.config().paths.inbound_paths_extra, r.config().paths.inbound_hops()},
-          cc_blind_keys{r.secret_key(), crypto::blinding::CLIENT_CONTACT}
+        : path::PathHandler{
+              r, r.config().paths.inbound_paths + r.config().paths.inbound_paths_extra, r.config().paths.inbound_hops()}
     {
-        const auto& netconf = router.config().network;
-
-        _auth_tokens = netconf.exit_auths;
-
-        // *All* clients currently support speaking via QUIC tunnel:
-        protocols = protocol_flag::QUIC_TUNNEL;
-        if (!router.embedded())
+        if (!r.is_service_node)
         {
-            // raw IPv4/IPv6/exit traffic all require a full tun interface.
+            const auto& netconf = router.config().network;
 
-            protocols = protocol_flag::IPV4 | protocol_flag::IPV6;
-            if (router.is_exit_node())
-                protocols |= protocol_flag::EXIT;
+            _auth_tokens = netconf.exit_auths;
+
+            protocol_flag protocols = protocol_flag::PFS_PQ;
+            if (!router.embedded())
+                protocols |= protocol_flag::IPV4 | protocol_flag::IPV6;
+
+            client_contact.emplace(
+                router.key_manager.router_id(), netconf.srv_records, protocols, sys_ms{}, netconf.traffic_policy);
+
+            cc_blind_keys.emplace(r.secret_key(), crypto::blinding::CLIENT_CONTACT);
         }
-
-        client_contact = ClientContact{
-            router.key_manager.router_id(), netconf.srv_records, protocols, sys_ms{}, netconf.traffic_policy};
     }
 
     std::array<int, 5> SessionEndpoint::session_stats() const
@@ -104,7 +100,7 @@ namespace srouter::handlers
         return stats;
     }
 
-    void SessionEndpoint::close_session(std::shared_ptr<session::Session>& s, bool send_close)
+    void SessionEndpoint::close_session(const std::shared_ptr<session::Session>& s, bool send_close)
     {
         log::trace(logcat, "{} called", __PRETTY_FUNCTION__);
 
@@ -117,12 +113,22 @@ namespace srouter::handlers
         if (auto& tun = router.tun_endpoint())
             tun->expire(remote);
 
-        if (auto it = _sessions.find(remote); it != _sessions.end())
-        {
-            if (auto& s = it->second)
-                _session_tags.erase(s->inbound_tag());
-            _sessions.erase(it);
-        }
+        // defer this in case we're in the middle of iterating the container(s)
+        // capture a weak_ptr to the session so that if for whatever reason
+        router._jq->call_soon([this, weak = std::weak_ptr(s)]() {
+            if (auto shared = weak.lock())
+            {
+                if (auto it = _sessions.find(shared->remote()); it != _sessions.end())
+                {
+                    if (shared != it->second)
+                        return;  // session is already gone
+
+                    if (auto& s = it->second)
+                        _session_tags.erase(s->inbound_tag());
+                    _sessions.erase(it);
+                }
+            }
+        });
     }
 
     bool SessionEndpoint::close_session(NetworkAddress remote, bool send_close)
@@ -168,19 +174,17 @@ namespace srouter::handlers
 
         _running = false;
 
-        if (_path_rotater)
-        {
-            _path_rotater.reset();
-            log::trace(logcat, "Path rotation ticker stopped!");
-        }
-
         // Do a best-effort close; if send_close is true these close(true) calls should queue a
         // path_close on the active stream, even though we immediately drop the streams below, which
         // should still typically arrive at the other side.
         for (auto& s : std::views::values(_sessions))
             s->close(send_close);
 
-        _sessions.clear();
+        // Note: we do not clear _sessions here, letting it be cleaned up when this SessionEndpoint
+        // is destroyed during `delete router` instead.  This was originally load-bearing: a pending
+        // path-build callback held its PathHandler raw, so freeing the sessions here was a
+        // use-after-free.  Those callbacks check the handler's canary now, so clearing here would
+        // be safe; it is left alone only because nothing needs it to change.
         _session_tags.clear();
 
         path::PathHandler::stop();
@@ -780,99 +784,7 @@ namespace srouter::handlers
 
     void SessionEndpoint::lookup_relay_contact(RouterID remote, std::function<void(std::optional<RelayContact>)> func)
     {
-        if (auto* maybe_rc = router.node_db().get_rc(remote))
-        {
-            log::debug(logcat, "RelayContact for remote (rid: {}) found locally!", remote);
-            try_calling(logcat, func, *maybe_rc);
-            return;
-        }
-
-        log::debug(logcat, "Looking up RelayContact for remote (rid:{})", remote.to_network_address(true));
-
-        auto remaining = std::make_shared<int>(0);
-
-        auto response_handler = [this, remote, func = std::move(func), remaining](auto resp) {
-            int rem = --*remaining;
-            if (rem < 0)
-            {  // Some other path handler already replied
-                log::trace(logcat, "Dropping duplicate `fetch_rc` response (success: {})", resp.ok());
-                return;
-            }
-
-            std::optional<RelayContact> rc;
-            try
-            {
-                if (resp.ok())
-                {
-                    log::info(logcat, "Call to FetchRC succeeded!");
-
-                    std::vector<RelayContact> rcs;
-                    oxenc::bt_dict_consumer btdc{resp.body};
-                    for (auto sublist = btdc.require<oxenc::bt_list_consumer>("r"); not sublist.is_finished();)
-                        rcs.emplace_back(sublist.consume_dict_data(), router.netid());
-
-                    if (rcs.empty())
-                        log::warning(logcat, "Received empty response from `fetch_rc` request!");
-                    else if (rcs.size() > 1)
-                        log::warning(
-                            logcat, "Received more RC's than expected (n:{}) from `fetch_rc` request!", rcs.size());
-                    else
-                    {
-                        log::debug(logcat, "Storing RelayContact for remote rid:{}", remote);
-                        router.node_db().put_rc(rcs.front());
-                        rc = std::move(rcs.front());
-                    }
-                }
-                else
-                {
-                    std::optional<std::string> status = std::nullopt;
-                    oxenc::bt_dict_consumer btdc{resp.body};
-
-                    if (auto s = btdc.maybe<std::string>(messages::STATUS_KEY))
-                        status = s;
-
-                    log::warning(logcat, "Call to FetchRCs FAILED; reason: {}", status.value_or("<none given>"));
-                }
-            }
-            catch (const std::exception& e)
-            {
-                log::warning(logcat, "An error occured processing fetched rc response: {}", e.what());
-            }
-
-            if (rc)
-            {
-                *remaining = 0;
-                try_calling(logcat, func, std::move(rc));
-            }
-            else if (rem == 0)
-            {
-                // We are the last path response and there have been no successes, so signal failure
-                try_calling(logcat, func, std::nullopt);
-            }
-        };
-
-        Lock_t l{paths_mutex};
-
-        for (const auto& [_, p] : _paths)
-        {
-            if (not p or not p->is_active())
-                continue;
-
-            ++*remaining;
-            log::debug(
-                logcat,
-                "Querying pivot (rid:{}) for RelayContact lookup target (rid:{})",
-                p->terminal_rid().short_string(),
-                remote);
-
-            p->fetch_relay_contact(remote, response_handler);
-        }
-
-        if (*remaining == 0)
-        {
-            log::warning(logcat, "RC lookup failed: no usable paths!");
-            try_calling(logcat, func, std::nullopt);
-        }
+        router.node_db().lookup_rc(remote, std::move(func));
     }
 
     const std::optional<ClientContact>& SessionEndpoint::update_cc(
@@ -1076,6 +988,8 @@ namespace srouter::handlers
             return;
         }
 
+        assert(client_contact && cc_blind_keys);
+
         log::debug(logcat, "Updating and publishing ClientContact...");
 
         auto now = srouter::time_now_ms();
@@ -1084,15 +998,15 @@ namespace srouter::handlers
             if (p and p->is_active(now))
                 intros.push_back(p->make_intro());
 
-        client_contact.update_intros(std::move(intros));
+        client_contact->update_intros(std::move(intros));
 
-        log::debug(logcat, "New ClientContact: {}", client_contact);
+        log::debug(logcat, "New ClientContact: {}", *client_contact);
 #ifndef NDEBUG
         log::debug(logcat, "ClientContact details:");
-        log::debug(logcat, "Pubkey: {}", client_contact.pubkey());
-        log::debug(logcat, "{} SRV records", client_contact.SRVs().size());
-        log::debug(logcat, "Intros ({}):", client_contact.intros().size());
-        for (const auto& ci : client_contact.intros())
+        log::debug(logcat, "Pubkey: {}", client_contact->pubkey());
+        log::debug(logcat, "{} SRV records", client_contact->SRVs().size());
+        log::debug(logcat, "Intros ({}):", client_contact->intros().size());
+        for (const auto& ci : client_contact->intros())
             log::debug(
                 logcat,
                 "    • {}, hopid: {}, expiry: {}",
@@ -1103,7 +1017,7 @@ namespace srouter::handlers
 
         try
         {
-            publish_client_contact(client_contact.encrypt_and_sign(cc_blind_keys));
+            publish_client_contact(client_contact->encrypt_and_sign(*cc_blind_keys));
         }
         catch (const std::exception& e)
         {
@@ -1131,15 +1045,21 @@ namespace srouter::handlers
     std::optional<ipv4> SessionEndpoint::map_session_v4(const session::Session& s)
     {
         log::trace(logcat, "{} called", __PRETTY_FUNCTION__);
-        assert(router.tun_endpoint());
 
-        log::debug(logcat, "Mapping ipv4 for inbound session frmo {}", s.remote());
-        auto addr = router.tun_endpoint()->map4(s.remote());
-        if (addr)
-            log::debug(logcat, "Mapping successful, address: {}", *addr);
-        else
-            log::warning(logcat, "Mapping unsuccessful; out of available addresses?");
-        return addr;
+        if (const auto& tun = router.tun_endpoint())
+        {
+            log::debug(logcat, "Mapping local tun ipv4 for inbound session from {}", s.remote());
+            auto addr = tun->map4(s.remote());
+            if (addr)
+                log::debug(logcat, "Mapping successful, address: {}", *addr);
+            else
+                log::warning(logcat, "Mapping unsuccessful; out of available addresses?");
+            return addr;
+        }
+
+        // TODO: no tun-based
+
+        return std::nullopt;
     }
 
     std::optional<ipv6> SessionEndpoint::map_session_v6(const session::Session& s)
@@ -1162,7 +1082,7 @@ namespace srouter::handlers
         return std::nullopt;
     }
 
-    void SessionEndpoint::handle_session_init(std::vector<std::byte>&& payload, std::shared_ptr<path::Path> path)
+    void SessionEndpoint::handle_session_init(std::span<const std::byte> payload, std::shared_ptr<path::Path> path)
     {
         std::shared_ptr<session::InboundSession> new_session{};
         try
@@ -1177,7 +1097,8 @@ namespace srouter::handlers
         session_post_init(std::move(new_session));
     }
 
-    void SessionEndpoint::handle_session_init(std::vector<std::byte>&& payload, std::shared_ptr<path::TransitHop> thop)
+    void SessionEndpoint::handle_session_init(
+        std::span<const std::byte> payload, std::shared_ptr<path::TransitHop> thop)
     {
         log::debug(logcat, "SessionEndpoint::handle_session_init (relay)");
         std::shared_ptr<session::InboundSession> new_session{};
@@ -1214,6 +1135,12 @@ namespace srouter::handlers
         // FIXME: If the initiator does not get our response in time, they will try again
         // to establish a session; in that case we should replace what we have.
         auto& s = _sessions[new_session->remote()];
+
+        // if there was already a session to the remote, we're trampling it, so clear it from
+        // _session_tags
+        if (s)
+            _session_tags.erase(s->inbound_tag());
+
         auto* sptr = new_session.get();
         s = std::move(new_session);
         _session_tags[s->inbound_tag()] = s;
@@ -1329,11 +1256,11 @@ namespace srouter::handlers
         std::function<void(session::Session& session)> on_attempted,
         std::optional<std::chrono::milliseconds> timeout)
     {
-        return router.loop.call_get([this, &remote, &on_attempted, &timeout] {
+        return router._jq->call_get([this, &remote, &on_attempted, &timeout] {
             std::shared_ptr<session::Session> s{nullptr};
-            if (_sessions.contains(remote))
-                s = _sessions[remote];
-            if (s && !s->is_closed())
+            if (auto it = _sessions.find(remote); it != _sessions.end())
+                s = it->second;
+            if (s && !s->is_closed() && !s->is_unreachable())
             {
                 if (on_attempted)
                 {
@@ -1355,11 +1282,24 @@ namespace srouter::handlers
                 try
                 {
                     if (remote.client())
-                        s = router.loop.make_shared<session::OutboundClientSession>(
+                        s = router._jq->make_shared<session::OutboundClientSession>(
                             remote, *this, tag, std::move(on_attempted), timeout);
                     else
-                        s = router.loop.make_shared<session::OutboundRelaySession>(
+                        s = router._jq->make_shared<session::OutboundRelaySession>(
                             remote, *this, tag, std::move(on_attempted), timeout);
+
+                    // A relay session looks its RC up during construction, so if the relay has no
+                    // RC we already know the session can never establish.  Don't register it: the
+                    // caller gets nullptr, and a later attempt builds a fresh session that looks
+                    // the RC up again rather than reusing this verdict.
+                    //
+                    // Only catches a lookup that answered inline, which is the usual case but not
+                    // the one that hurts: before the first RC fetch completes NodeDB::lookup_rc
+                    // queues the callback, and the verdict lands after we have registered the
+                    // session.  OutboundSession::tick closes it when that happens.
+                    if (s->is_unreachable())
+                        return std::shared_ptr<session::Session>{nullptr};
+
                     _session_tags.emplace(tag, s);
                     _sessions[remote] = s;
                 }
@@ -1388,10 +1328,27 @@ namespace srouter::handlers
             visit(addr, *s);
     }
 
-    std::pair<uint16_t, std::shared_ptr<session::Session>> SessionEndpoint::map_udp_remote_port(
+    std::vector<path::Path*> SessionEndpoint::outbound_session_paths() const
+    {
+        std::vector<path::Path*> paths;
+
+        for (const auto& [remote, session] : _sessions)
+        {
+            if (not session->is_outbound)
+                continue;
+
+            if (auto* outbound = dynamic_cast<session::OutboundSession*>(session.get()))
+                for (auto& path : outbound->active_paths())
+                    paths.push_back(&path);
+        }
+
+        return paths;
+    }
+
+    std::optional<std::pair<uint16_t, std::shared_ptr<session::Session>>> SessionEndpoint::map_udp_remote_port(
         const NetworkAddress& remote, uint16_t port)
     {
-        return router.loop.call_get([&] {
+        return router._jq->call_get([&]() -> std::optional<std::pair<uint16_t, std::shared_ptr<session::Session>>> {
             // Port selection: we pick something random in the 49152-60000 range to start from, as
             // that range (up to 60999) is common to all modern OSes for ephemeral addresses, and so
             // at least our first thousand ports will look like a normal random ephemeral port.
@@ -1402,16 +1359,22 @@ namespace srouter::handlers
             std::pair<uint16_t, std::shared_ptr<session::Session>> result;
             auto& [local_port, session] = result;
             session = initiate_remote_session(remote);  // throws on immediate error
+            if (!session)
+            {
+                log::debug(logcat, "Not mapping a UDP port for {}: remote is unreachable", remote);
+                return std::nullopt;
+            }
 
             mapped_remote target{.remote = remote, .port = port};
-            auto& [udp_handle, cports] = _udp_handles[target];
+            auto& [udp_handle, cports, holders] = _udp_handles[target];
             bool existing = static_cast<bool>(udp_handle);
+            holders++;
             if (!existing)
 
                 udp_handle = std::make_unique<quic::UDPSocket>(
-                    router.loop.get_event_base(),
+                    router.loop().get_event_base(),
                     quic::Address{"::1", 0},
-                    /*gso=*/false,
+                    quic::UDPSocket::options{},
                     [this, target](quic::Packet&& pkt) {
                         // FIXME: cache most recently used mapping/session/etc.?
                         //        i.e. if this packet is for the same remote as the last packet
@@ -1429,6 +1392,14 @@ namespace srouter::handlers
                                 "Received local mapped UDP packet, but unable to obtain/initiate a session with {}: {}",
                                 target.remote,
                                 e.what());
+                            return;
+                        }
+                        if (!session)
+                        {
+                            log::warning(
+                                logcat,
+                                "Received local mapped UDP packet for unreachable remote {}, dropping",
+                                target.remote);
                             return;
                         }
 
@@ -1458,7 +1429,7 @@ namespace srouter::handlers
                                 }
                             }
                             if (auto it = _udp_handles.find(target); it != _udp_handles.end())
-                                it->second.second.push_back(instance);
+                                it->second.cports.push_back(instance);
                             mapped_port = new_port.port;
                             log::debug(
                                 logcat,
@@ -1492,29 +1463,40 @@ namespace srouter::handlers
 
     void SessionEndpoint::unmap_udp_remote_port(const NetworkAddress& remote, uint16_t port)
     {
-        mapped_remote rem{.remote = remote, .port = port};
+        // As in map_udp_remote_port: these containers belong to the job queue thread, and an
+        // embedded caller can be on any thread at all.
+        router._jq->call_get([&] {
+            mapped_remote rem{.remote = remote, .port = port};
 
-        auto it = _udp_handles.find(rem);
-        if (it == _udp_handles.end())
-        {
-            log::debug(logcat, "Nothing to unmap: {}:{} is not currently a mapped UDP port", remote, port);
-            return;
-        }
-
-        auto& [sock, cports] = it->second;
-        for (auto& c : cports)
-        {
-            if (auto cit = _udp_client_ports.find(c); cit != _udp_client_ports.end())
+            auto it = _udp_handles.find(rem);
+            if (it == _udp_handles.end())
             {
-                _udp_return_ports.erase(mapped_remote{.remote = remote, .port = cit->second});
-                _udp_client_ports.erase(cit);
+                log::debug(logcat, "Nothing to unmap: {}:{} is not currently a mapped UDP port", remote, port);
+                return;
             }
-        }
 
-        auto local_port = sock->address().port();
-        _udp_handles.erase(it);
+            auto& [sock, cports, holders] = it->second;
+            if (--holders > 0)
+            {
+                log::debug(
+                    logcat, "Released a claim on {}:{}; {} still held, keeping it mapped", remote, port, holders);
+                return;
+            }
 
-        log::debug(logcat, "Unmapped localhost:{} -> {}:{} UDP mapping", local_port, remote, port);
+            for (auto& c : cports)
+            {
+                if (auto cit = _udp_client_ports.find(c); cit != _udp_client_ports.end())
+                {
+                    _udp_return_ports.erase(mapped_remote{.remote = remote, .port = cit->second});
+                    _udp_client_ports.erase(cit);
+                }
+            }
+
+            auto local_port = sock->address().port();
+            _udp_handles.erase(it);
+
+            log::debug(logcat, "Unmapped localhost:{} -> {}:{} UDP mapping", local_port, remote, port);
+        });
     }
 
 }  //  namespace srouter::handlers

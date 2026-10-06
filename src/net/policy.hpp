@@ -13,10 +13,14 @@ namespace srouter
     enum class protocol_flag : uint8_t
     {
         NONE = 0,
-        EXIT = 1 << 0,         // This client is configured to route (some) exit traffic
-        QUIC_TUNNEL = 1 << 1,  // This client supports QUIC tunnel (currently always enabled)
-        IPV4 = 1 << 2,  // This client support Session Router raw IPv4 packets (always set for non-embedded clients)
-        IPV6 = 1 << 3,  // This client support Session Router raw IPv6 packets (not yet supported)
+        // 1 << 0,  // Not currently used.
+        // 1 << 1,  // Not currently used.
+        IPV4 = 1 << 2,    // This client support Session Router raw IPv4 packets (currently always
+                          // set for non-embedded clients)
+        IPV6 = 1 << 3,    // This client support Session Router raw IPv6 packets (currently always
+                          // set for non-embedded clients)
+        PFS_PQ = 1 << 4,  // This client supports PFS+PQ session initiation.  This flag will be
+                          // dropped in the future, once 1.0.x Session Router support is dropped.
     };
     inline constexpr protocol_flag operator&(protocol_flag a, protocol_flag b)
     {
@@ -41,18 +45,6 @@ namespace srouter
     {
         return (flags & contains) == contains;
     }
-
-    /** proto_mask
-        - When negotiating sessions and advertising client contacts, all flags can be used
-        - When prepended to a datagram, only 2 bits are needed for 4 configurations
-            - host, standard = 00
-            - host, quictun = 01
-            - exit, standard = 10
-            - exit, quictun = 11
-
-        FIXME: What?  I think this is obsolete.
-    */
-    inline constexpr protocol_flag proto_mask = protocol_flag::EXIT | protocol_flag::QUIC_TUNNEL;
 
     std::string to_string(protocol_flag p);
 

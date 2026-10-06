@@ -1,13 +1,11 @@
 #pragma once
 
+#include "address/types.hpp"
 #include "constants/path.hpp"
-#include "contact/client_contact.hpp"
+#include "contact/client_intro.hpp"
 #include "contact/relay_contact.hpp"
-#include "crypto/types.hpp"
+#include "crypto/crypto.hpp"
 #include "transit_hop.hpp"
-#include "util/aligned.hpp"
-#include "util/compare_ptr.hpp"
-#include "util/thread/threading.hpp"
 #include "util/time.hpp"
 
 #include <chrono>
@@ -32,8 +30,6 @@ namespace srouter
 
 namespace srouter::path
 {
-    class PathHandler;
-
     /// Proxy object to produce a human readable hop list in log statements on demand.  This
     /// object is only intended to be used directly in format or log statements and not held.
     struct path_hop_stringifier
@@ -53,10 +49,26 @@ namespace srouter::path
         bool ok() { return !timed_out && !error; }
     };
 
+    // The constant "type" values that we put on the end of control (stream) and data
+    // (datagram) messages.  Data message can overlap since it comes on a different channel
+    enum struct MessageType : unsigned char
+    {
+        Data = 0x01,
+
+        CONTROL_MIN = 0x01,
+        // Regular, session-encrypted control message:
+        Control = 0x01,
+        // SessionHandshake messages, which include session init, session accept, and path switch
+        // messages (which are combined path switch + fallback session init messages).  NB: before
+        // v1.1, these used to be exclusive used for path switch but not session init/accept.
+        SessionHandshake = 0x02,
+        CONTROL_MAX = 0x02,
+    };
+
     class Path final : public std::enable_shared_from_this<Path>
     {
       public:
-        Path(Router& rtr, std::span<const RelayContact> hop_rcs, PathHandler& handler, sys_ms expiry_ts);
+        Path(Router& rtr, std::span<const RelayContact> hop_rcs, sys_ms expiry_ts);
 
         // hops on constructed path
         std::vector<TransitHop> hops;
@@ -64,8 +76,6 @@ namespace srouter::path
         // If set, this is an aligned path to a pivot and this value is the hopid required to
         // send data through the pivot.
         std::optional<HopID> aligned_hopid;
-
-        std::weak_ptr<PathHandler> handler;
 
         // Constructs a ClientInfo from this path, i.e. for including in a client contact.
         ClientIntro make_intro() const;
@@ -77,9 +87,9 @@ namespace srouter::path
             // relay pubkeys and IPv4 addresses, from edge -> pivot (or final relay)
             std::vector<std::pair<RouterID, ipv4>> relays;
             sys_ms expiry = {};
-            std::chrono::milliseconds ping_mean;
-            std::chrono::microseconds ping_jitter;
-            int ping_responses, ping_timeouts, ping_recent_timeouts;
+            std::chrono::milliseconds ping_mean{0};
+            std::chrono::microseconds ping_jitter{0};
+            int ping_responses{0}, ping_timeouts{0}, ping_recent_timeouts{0};
         };
         Info get_info() const;
 
@@ -95,10 +105,7 @@ namespace srouter::path
 
         bool is_expired(sys_ms now = srouter::time_now_ms()) const { return _expiry < now; }
 
-        void resolve_sns(
-            std::span<const std::byte, SHORTHASHSIZE> name_hash, std::function<void(path_control_response)> func);
-
-        void fetch_relay_contact(const RouterID& needed, std::function<void(path_control_response)> func);
+        void resolve_sns(std::span<const std::byte, 32> name_hash, std::function<void(path_control_response)> func);
 
         void fetch_relay_contacts(std::span<const std::byte> body, std::function<void(path_control_response)> func);
 
@@ -108,19 +115,13 @@ namespace srouter::path
         void publish_client_contact(
             std::string_view enc_cc, int location, std::function<void(path_control_response)> func);
 
-        // The constant "type" values that we put on the end of control (stream) and data
-        // (datagram) messages.  Data message can overlap since it comes on a different channel
-        static constexpr std::byte DATA_MESSAGE_TYPE{0x01};
-        static constexpr std::byte CONTROL_MESSAGE_TYPE{0x01};
-        static constexpr std::byte PATH_SWITCH_MESSAGE_TYPE{0x02};
-
         void send_path_data_message(std::vector<std::byte>&& body, SymmNonce&& nonce = SymmNonce::make_random());
 
         void send_path_control_message(
             std::string_view method, std::span<const std::byte> body, std::function<void(path_control_response)> func);
 
         void send_session_control_message(
-            std::vector<std::byte>&& body, SymmNonce&& nonce, std::byte type = CONTROL_MESSAGE_TYPE);
+            std::vector<std::byte>&& body, SymmNonce&& nonce, MessageType type = MessageType::Control);
 
         // The overhead added to encrypted path messages (either data messages or path control
         // messages) by the `encrypt_path_message` function.  This is the amount that the
@@ -129,7 +130,7 @@ namespace srouter::path
         // allocations.
         inline static constexpr size_t ENCRYPT_PATH_MESSAGE_OVERHEAD = SymmNonce::SIZE + HopID::SIZE + 1;
         inline static constexpr size_t ENCRYPT_PATH_MESSAGE_OVERHEAD_MAC =
-            ENCRYPT_PATH_MESSAGE_OVERHEAD + crypto::MAC_SIZE;
+            ENCRYPT_PATH_MESSAGE_OVERHEAD + crypto::TAG_SIZE;
 
         // Takes a payload and encrypts and extends it in-place to make it suitable for sending
         // down either the datagram channel (carrying traffic) or stream (carrying network
@@ -149,7 +150,7 @@ namespace srouter::path
         // may need to change the fundamental structure of encrypted data, or send different
         // types of data)
         void encrypt_path_message(
-            std::vector<std::byte>& payload, SymmNonce&& nonce, std::byte type, bool with_mac = false);
+            std::vector<std::byte>& payload, SymmNonce&& nonce, MessageType type, bool with_mac = false);
 
         std::string decrypt_path_message(std::string_view payload);
 

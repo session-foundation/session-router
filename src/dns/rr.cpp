@@ -117,6 +117,41 @@ namespace srouter::dns
         } while (!value.empty());
     }
 
+    RR_SOA::RR_SOA(
+        std::string rr_name,
+        std::chrono::seconds ttl,
+        std::string_view mname,
+        std::string_view rname,
+        uint32_t serial,
+        std::chrono::seconds minimum,
+        std::chrono::seconds refresh,
+        std::chrono::seconds retry,
+        std::chrono::seconds expire)
+        : RR_bytes{std::move(rr_name), ttl}
+    {
+        // for mname and rname we don't use name compression (it's allowed, but usually not done)
+        // and so each one of these, with standard encoding, goes from "abc.def.xyz." to
+        // '\x03abc\x03def\x03xyz\x00': that is, each dot-terminated segment gains a \x03, but we
+        // don't include the .'s, and then append a null, meaning the total size will be currsize +
+        // 1.  If the string aren't .-terminated, however, we imply the . and thus each becomes
+        // currsize + 2.
+        rData.resize(
+            (mname.size() + !mname.ends_with('.') + 1) + (rname.size() + !rname.ends_with('.') + 1)
+            + 5 * sizeof(uint32_t));
+        std::span buf{rData.data(), rData.size()};
+        encode_name(buf, mname, nullptr, nullptr);
+        encode_name(buf, rname, nullptr, nullptr);
+        assert(buf.size() == 5 * sizeof(uint32_t));
+        oxenc::write_host_as_big(serial, buf.data());
+        buf = buf.subspan(sizeof(uint32_t));
+        for (auto* i : {&refresh, &retry, &expire, &minimum})
+        {
+            oxenc::write_host_as_big(static_cast<uint32_t>(i->count()), buf.data());
+            buf = buf.subspan(sizeof(uint32_t));
+        }
+        assert(buf.empty());
+    }
+
     void RR_target::encode_data(std::span<std::byte>& buf, prev_names_t& prev_names, uint16_t& buf_offset) const
     {
         encode_name(buf, name, &prev_names, &buf_offset);

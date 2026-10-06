@@ -7,7 +7,6 @@
 #include "constants/files.hpp"
 #include "constants/path.hpp"
 #include "contact/relay_contact.hpp"
-#include "crypto/types.hpp"
 #include "definition.hpp"
 #include "dns/srv_data.hpp"
 #include "ini.hpp"
@@ -23,6 +22,20 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
+
+namespace srouter::config
+{
+    // Optional stricter validator for the [oxend]:rpc address, installed by the full library (which
+    // parses it via oxenmq::address).  Null in embedded/core-only builds, where config.cpp falls
+    // back to a cheap scheme check so oxenmq stays out of the core config library.  Installed via
+    // install_full_config_validators().
+    inline void (*oxend_rpc_addr_validator)(const std::string&) = nullptr;
+
+    // Installs the full library's stricter config validators over the core defaults.  Defined in the
+    // full (rpc) library; invoked by srouter::full::initialize().
+    void install_full_config_validators();
+
+}  // namespace srouter::config
 
 namespace srouter
 {
@@ -185,6 +198,9 @@ namespace srouter
         std::optional<ipv4_net> _local_ip_net;
         std::optional<ipv6_net> _local_ipv6_net;
 
+        bool ipv4_autoselect() const { return !_local_ip_net || !_local_ip_net->ip.addr; }
+        bool ipv6_autoselect() const { return !_local_ipv6_net || !(_local_ipv6_net->ip.hi || _local_ipv6_net->ip.lo); }
+
         // Remote exit or hidden service addresses mapped to fixed local IP addresses
         // TODO:
         //  - load directly into TunEndpoint mapping
@@ -224,6 +240,8 @@ namespace srouter
     struct LinksConfig : ConfigBase
     {
         std::optional<quic::Address> listen_addr;
+        // nullopt means no cap.
+        std::optional<size_t> max_udp_payload;
 
         void define_config_options(ConfigDefinition& conf) override;
     };

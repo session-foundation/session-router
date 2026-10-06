@@ -9,10 +9,12 @@
 #include <oxen/quic/connection_ids.hpp>
 #include <oxen/quic/endpoint.hpp>
 #include <oxen/quic/gnutls_crypto.hpp>
+#include <oxen/quic/loop.hpp>
 
 #include <array>
 #include <chrono>
 #include <memory>
+#include <optional>
 
 namespace srouter
 {
@@ -29,7 +31,7 @@ namespace srouter::link
     // buffer is to allow any messages or data to be handled that might have been send down the
     // less-preferred connection before both directions were established.
     //
-    // We also use this value as a ticker interval, so redundant connections can stay alive up to
+    // We also use this value as a timer interval, so redundant connections can stay alive up to
     // twice this value.
     inline constexpr auto REDUNDANT_LINGER = 20s;
 
@@ -121,8 +123,8 @@ namespace srouter::link
         std::unordered_map<quic::ConnectionID, std::shared_ptr<link::Connection>> inbound_clients;
 
         std::shared_ptr<quic::Endpoint> endpoint;
-        std::shared_ptr<quic::Ticker> redundancy_ticker;
-        std::shared_ptr<quic::Ticker> dereg_conn_ticker;
+        quic::TimerID redundancy_timer;
+        quic::TimerID dereg_conn_timer;
         std::shared_ptr<quic::GNUTLSCreds> tls_creds;
 
         // Canary object that gets set to false during destruction to help short-circuit lambda that
@@ -130,7 +132,7 @@ namespace srouter::link
         std::shared_ptr<bool> canary = std::make_shared<bool>(true);
 
       public:
-        void start_tickers();
+        void start_timers();
 
         // Returns the connection to the given relay.  If there are established connections in both
         // directions (i.e. when running as a relay), this returns the mutually preferred one.
@@ -312,7 +314,7 @@ namespace srouter::link
 
       private:
         std::shared_ptr<quic::BTRequestStream> make_control(
-            quic::Connection& conn, std::span<const unsigned char> remote_key, std::string_view alpn);
+            quic::Connection& conn, std::span<const std::byte> remote_key, std::string_view alpn);
 
         void on_inbound_conn(std::shared_ptr<quic::Connection> conn, std::shared_ptr<quic::BTRequestStream> control);
         void on_outbound_conn(std::shared_ptr<quic::Connection> conn);

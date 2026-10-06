@@ -23,8 +23,6 @@ namespace srouter::vpn
 {
     static auto logcat = log::Cat("vpn.linux");
 
-    inline constexpr std::array<ipv6, 4> if_ipv6_addrs{ipv6{}, ipv6{0x4000}, ipv6{0x8000}, ipv6{0xc000}};
-
     struct in6_ifreq
     {
         in6_addr addr;
@@ -103,11 +101,18 @@ namespace srouter::vpn
             if (_info.addrs.empty())
                 throw std::runtime_error{"Cannot set up a TUN interface with no addresses!"};
 
+            auto net_plat = srouter::net::Platform::Default_ptr();
+            assert(net_plat);
+
             std::list<std::string> addr_strings;
+
+            // Counts the number of consecutive failures to apply an auto-selected unused range
+            int auto_failures = 0;
+
             // Add addresses to the tun interface:
-            for (const auto& ifaddr : _info.addrs)
+            for (auto it = _info.addrs.begin(); it != _info.addrs.end();)
             {
-                log::debug(logcat, "Adding address {} to {}", ifaddr, _info.ifname);
+                auto& ifaddr = *it;
                 struct
                 {
                     nlmsghdr header;
@@ -121,8 +126,23 @@ namespace srouter::vpn
                 request.header.nlmsg_type = RTM_NEWADDR;
                 request.content.ifa_index = _info.index;
 
-                if (auto* n4 = std::get_if<ipv4_net>(&ifaddr))
+                const ipv4_net* n4 = std::get_if<ipv4_net>(&ifaddr);
+                const ipv6_net* n6 = nullptr;
+
+                std::optional<std::variant<ipv4_net, ipv6_net>> auto_addr;
+                if (n4)
                 {
+                    if (n4->ip == ipv4{})
+                    {  // "0" IP means auto-select a free range
+                        auto n = net_plat->find_free_ipv4_net(n4->mask);
+                        if (!n)
+                            throw std::runtime_error{
+                                "Could not find any unused private IPv4 /{} range for auto-selection"_format(n4->mask)};
+
+                        auto_addr = std::move(*n);
+                        n4 = &std::get<ipv4_net>(*auto_addr);
+                    }
+
                     addr_strings.push_back(n4->to_string());
                     request.content.ifa_family = AF_INET;
                     request.content.ifa_prefixlen = n4->mask;
@@ -140,66 +160,118 @@ namespace srouter::vpn
                 }
                 else
                 {
-                    auto& n6 = std::get<ipv6_net>(ifaddr);
-                    addr_strings.push_back(n6.to_string());
+                    n6 = &std::get<ipv6_net>(ifaddr);
+                    if (n6->ip == ipv6{})
+                    {  // "0" IP means auto-select a free range
+                        auto n = net_plat->find_free_ipv6_net(n6->mask);
+                        if (!n)
+                            throw std::runtime_error{
+                                "Could not find any unused private IPv6 /{} range for auto-selection"_format(n6->mask)};
+
+                        auto_addr = std::move(*n);
+                        n6 = &std::get<ipv6_net>(*auto_addr);
+                    }
+
+                    addr_strings.push_back(n6->to_string());
                     request.content.ifa_family = AF_INET6;
-                    request.content.ifa_prefixlen = n6.mask;
+                    request.content.ifa_prefixlen = n6->mask;
                     auto* req_attr = IFA_RTA(&request.content);
                     req_attr->rta_type = IFA_LOCAL;
                     req_attr->rta_len = RTA_LENGTH(sizeof(in6_addr));
                     request.header.nlmsg_len += req_attr->rta_len;
                     char* addr_data = static_cast<char*>(RTA_DATA(req_attr));
-                    oxenc::write_host_as_big(n6.ip.hi, addr_data);
-                    oxenc::write_host_as_big(n6.ip.lo, addr_data + 8);
+                    oxenc::write_host_as_big(n6->ip.hi, addr_data);
+                    oxenc::write_host_as_big(n6->ip.lo, addr_data + 8);
 
                     req_attr = RTA_NEXT(req_attr, buf_avail);
                     req_attr->rta_type = IFA_ADDRESS;
                     req_attr->rta_len = RTA_LENGTH(sizeof(in6_addr));
                     request.header.nlmsg_len += req_attr->rta_len;
                     addr_data = static_cast<char*>(RTA_DATA(req_attr));
-                    oxenc::write_host_as_big(n6.ip.hi, addr_data);
-                    oxenc::write_host_as_big(n6.ip.lo, addr_data + 8);
+                    oxenc::write_host_as_big(n6->ip.hi, addr_data);
+                    oxenc::write_host_as_big(n6->ip.lo, addr_data + 8);
                 }
 
                 if (auto err = nl_submit(nlfd, request))
                     throw std::runtime_error{
                         "Failed to add address {} to {}: {}"_format(addr_strings.back(), _info.ifname, *err)};
-            }
 
-            // Check to make sure that we are the *only* interface with our configured addresses, in
-            // case some other session-router raced us for it.
-            ifaddrs* ia;
-            if (0 != getifaddrs(&ia))
-                throw std::runtime_error{"Failed to query network addresses to check for duplicates"};
+                // Adding a conflicting address does not fail, and so we need to go query all the
+                // addresses on the system to see if the same address exists on any *other*
+                // interface and if so, either retry (if we are using auto-selection) or error out.
 
-            for (; ia; ia = ia->ifa_next)
-            {
-                if (ia->ifa_name == _info.ifname)
-                    continue;  // This is our own one that we just added
+                ifaddrs* ia_head;
+                if (0 != getifaddrs(&ia_head))
+                    throw std::runtime_error{"Failed to query network addresses to check for duplicates"};
 
-                for (const auto& a : _info.addrs)
+                std::string problem;
+                for (ifaddrs* ia = ia_head; ia && problem.empty(); ia = ia->ifa_next)
                 {
-                    if (auto* v4 = std::get_if<ipv4_net>(&a);
-                        v4 and ia->ifa_addr and ia->ifa_addr->sa_family == AF_INET)
+                    if (ia->ifa_name == _info.ifname)
+                        continue;  // This is our own one that we just added
+
+                    if (!ia->ifa_addr)
+                        continue;  // Dunno
+
+                    if (n4 && ia->ifa_addr->sa_family == AF_INET)
                     {
                         ipv4 found4{reinterpret_cast<sockaddr_in*>(ia->ifa_addr)->sin_addr};
-                        if (v4->contains(found4))
-                            throw std::runtime_error{
+                        if (n4->contains(found4))
+                            problem =
                                 "TUN setup {} with address {} failed: found conflicting IP {} on network interface {}"_format(
-                                    _info.ifname, *v4, found4, ia->ifa_name)};
+                                    _info.ifname, *n4, found4, ia->ifa_name);
                     }
-                    else if (auto* v6 = std::get_if<ipv6_net>(&a);
-                             v6 and ia->ifa_addr and ia->ifa_addr->sa_family == AF_INET6)
+                    else if (n6 && ia->ifa_addr && ia->ifa_addr->sa_family == AF_INET6)
                     {
                         ipv6 found6{reinterpret_cast<sockaddr_in6*>(ia->ifa_addr)->sin6_addr};
-                        if (v6->contains(found6))
-                            throw std::runtime_error{
+                        if (n6->contains(found6))
+                            problem =
                                 "TUN setup {} @ {} failed: found conflicting IP {} on network interface {}"_format(
-                                    _info.ifname, *v6, found6, ia->ifa_name)};
+                                    _info.ifname, *n6, found6, ia->ifa_name);
                     }
                 }
+                freeifaddrs(ia_head);
+
+                if (!problem.empty())
+                {
+                    if (auto_addr && auto_failures++ < 50)
+                    {
+                        log::warning(
+                            logcat,
+                            "Address auto-selection failure: {}; removing address and retrying auto-selection",
+                            problem);
+
+                        // The request to delete the address is identical, aside from the nlmsg_type and flags:
+                        request.header.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+                        request.header.nlmsg_type = RTM_DELADDR;
+                        if (auto err = nl_submit(nlfd, request))
+                            throw std::runtime_error{"Failed to delete address {} from {}: {}"_format(
+                                addr_strings.back(), _info.ifname, *err)};
+
+                        addr_strings.pop_back();
+
+                        // We add a tiny random delay here so that if we are racing with another SR
+                        // process trying to auto-select a range we are more likely to have one or
+                        // the other succeed and "win" a range without getting both stuck racing
+                        // again trying to use the same address again on the next iteration.
+                        std::this_thread::sleep_for(
+                            uniform_duration_distribution<std::chrono::nanoseconds>{0ms, 25ms}(csrng));
+
+                        continue;  // *Without* it++
+                    }
+
+                    throw std::runtime_error{problem};
+                }
+
+                if (auto_addr)
+                {
+                    log::info(logcat, "Auto-selected tun range {}", addr_strings.back());
+                    ifaddr = std::move(*auto_addr);
+                    auto_failures = 0;  // Reset in case the next address also needs auto-selection
+                }
+
+                ++it;
             }
-            freeifaddrs(ia);
 
             // Bring up the tun device:
             {

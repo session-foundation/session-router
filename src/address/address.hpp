@@ -34,7 +34,7 @@ namespace srouter
 
         bool operator==(const NetworkAddress& other) const = default;
 
-        bool empty() const { return pubkey.is_zero(); }
+        bool empty() const { return is_zero(pubkey); }
 
         bool client() const { return is_client; }
 
