@@ -17,7 +17,7 @@ namespace srouter::auth
         if (_is_snode_service)
             _session_key = _router.secret_key();
         else
-            _session_key = crypto::generate_ed25519();
+            _session_key = Ed25519SecretKey::generate();
     }
 
     std::optional<std::string_view> SessionAuthPolicy::fetch_auth_token()

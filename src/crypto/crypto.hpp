@@ -3,7 +3,6 @@
 #include "address/address.hpp"
 #include "contact/router_id.hpp"
 #include "keys.hpp"
-#include "types.hpp"
 
 #include <cstdint>
 
@@ -19,19 +18,35 @@ namespace srouter::crypto
         std::string_view ciphertext, const SymmNonce& nonce, std::string_view name);
 
     /// xchacha symmetric cipher
-    void xchacha20(std::span<std::byte> buf, const SharedSecret&, const SymmNonce&);
+    void xchacha20(std::span<std::byte> buf, const SymmKey&, const SymmNonce&);
 
-    static constexpr size_t MAC_SIZE = 16;
+    /// Size of the xchacha20+poly1305 authenticated encryption tag.
+    inline constexpr size_t TAG_SIZE = 16;
 
-    /// encrypts a buffer in-place, putting a MAC in the final bytes (which must be allocated
-    /// in the span but are not part of the data that is actually encrypted).
-    void xchacha20_poly1305_encrypt(std::span<std::byte> buf, const SharedSecret& secret, const SymmNonce& nonce);
-    void xchacha20_poly1305_encrypt(std::string& buf, const SharedSecret& secret, const SymmNonce& nonce);
+    /// Encrypts a buffer in-place, putting the tag (which functions as a MAC), in the final bytes
+    /// (which must be allocated in the span but are not part of the data that is actually
+    /// encrypted).
+    ///
+    /// That is: this encrypts `[buf.begin(), buf.end() - TAG_SIZE)` and writes the encrypted value
+    /// and tag into `[buf.begin(), buf.end())`.  Any existing data in the last TAG_SIZE bytes is
+    /// ignored and overwritten.
+    void xchacha20_poly1305_encrypt_inplace(std::span<std::byte> buf, const SymmKey& secret, const SymmNonce& nonce);
+    void xchacha20_poly1305_encrypt_inplace(std::string& buf, const SymmKey& secret, const SymmNonce& nonce);
 
-    /// decrypts a buffer in-place, validating it against the appended MAC
-    /// empty span means decryption failed; we don't allow encrypting an empty payload
-    std::span<std::byte> xchacha20_poly1305_decrypt(
-        std::span<std::byte> buf, const SharedSecret& secret, const SymmNonce& nonce);
+    /// Encrypts a value, allocating a new vector to hold it.
+    [[nodiscard]] std::vector<std::byte> xchacha20_poly1305_encrypt(
+        std::span<const std::byte> plaintext, const SymmKey& secret, const SymmNonce& nonce);
+
+    /// decrypts a buffer in-place, validating it against the embedded authentication tag in the
+    /// last TAG_SIZE bytes of the input.  Returns std::nullopt if decryption fails, otherwise it
+    /// overwrites first N-TAG_SIZE bytes of buf with the decrypted value and returns a subspan of
+    /// that data.
+    std::optional<std::span<std::byte>> xchacha20_poly1305_decrypt_inplace(
+        std::span<std::byte> buf, const SymmKey& secret, const SymmNonce& nonce);
+
+    /// Decryption with allocation of the output buffer.  Returns nullopt if decryption fails.
+    [[nodiscard]] std::optional<std::vector<std::byte>> xchacha20_poly1305_decrypt(
+        std::span<const std::byte> ciphertext, const SymmKey& secret, const SymmNonce& nonce);
 
     /// path dh creator's side
     ///
@@ -39,27 +54,21 @@ namespace srouter::crypto
     /// but isn't used as an encryption nonce (i.e. the same nonce can be safely used for both
     /// shared secret generation and an initial payload encryption).
     bool dh_client(
-        SharedSecret& out, const PubKey& server_pk, const Ed25519SecretKey& client_seckey, const SymmNonce& nonce);
+        SymmKey& out, const PubKey& server_pk, const Ed25519SecretKey& client_seckey, const SymmNonce& nonce);
 
     /// Generates an ephemeral keypair and random nonce, calls dh_client, then returns the resulting
     /// shared secret, the ephemeral pubkey, and the nonce.  Throws std::invalid_argument if the
     /// server pk is not valid.
-    std::tuple<SharedSecret, PubKey, SymmNonce> dh_client_gen(const PubKey& server_pk);
+    std::tuple<SymmKey, PubKey, SymmNonce> dh_client_gen(const PubKey& server_pk);
 
     /// path dh relay side
     bool dh_server(
-        SharedSecret& out, const PubKey& client_pk, const Ed25519SecretKey& server_seckey, const SymmNonce& nonce);
+        SymmKey& out, const PubKey& client_pk, const Ed25519SecretKey& server_seckey, const SymmNonce& nonce);
     bool dh_server(uint8_t* shared_secret, const uint8_t* other_pk, const uint8_t* local_sk, const uint8_t* nonce);
 
     /// blake2b 256 bit
-    void shorthash(std::span<std::byte, SHORTHASHSIZE> out, std::span<const std::byte> buf);
-    AlignedBuffer<SHORTHASHSIZE> shorthash(std::span<const std::byte> buf);
-
-    /// ed25519 verify
-    bool verify(
-        std::span<const std::byte, PUBKEYSIZE> pub,
-        std::span<const std::byte> data,
-        std::span<const std::byte, SIGSIZE> sig);
+    void shorthash(std::span<std::byte, 32> out, std::span<const std::byte> buf);
+    AlignedBuffer<32> shorthash(std::span<const std::byte> buf);
 
     /// Returns the Ed25519 scalar used for blinding of the given pubkey with the given
     /// blind_domain.  See `blind`.
@@ -85,8 +94,6 @@ namespace srouter::crypto
     {
         constexpr auto CLIENT_CONTACT = "SessionRouterClientContact"sv;
     }
-
-    Ed25519SecretKey generate_ed25519();
 
     // Verifies that the cached pubkey embedded in `keys` correctly corresponds with the seed value
     // in `keys`; effectively this checks for corruption of the keys value, such as when loading the

@@ -1,10 +1,7 @@
 #pragma once
 
-#include "config/config.hpp"
-#include "json_bt.hpp"
 #include "router/router.hpp"
 #include "rpc_request_decorators.hpp"
-#include "rpc_request_definitions.hpp"
 #include "rpc_request_parser.hpp"
 #include "rpc_server.hpp"
 
@@ -59,7 +56,7 @@ namespace srouter::rpc
 
             if (not std::is_base_of_v<Immediate, RPC>)
             {
-                server._router.loop.call_soon(std::move(handler));
+                server._router._jq->call_soon(std::move(handler));
             }
             else
             {

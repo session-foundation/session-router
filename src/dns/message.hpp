@@ -106,9 +106,9 @@ namespace srouter
 
             std::optional<Question> question;
             std::vector<std::unique_ptr<ResourceRecord>> answers;
+            std::vector<std::unique_ptr<ResourceRecord>> authorities;
 
             // Currently unused:
-            // std::vector<ResourceRecord> authorities;
             // std::vector<ResourceRecord> additional;
 
             // Currently the only additional record we do anything with is the OPT section for

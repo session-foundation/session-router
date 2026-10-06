@@ -16,11 +16,8 @@ namespace srouter
     std::string to_string(protocol_flag p)
     {
         auto has_flag = [&p](protocol_flag f) { return (p & f) == f; };
-        return "<{}{}{}{}>"_format(
-            has_flag(protocol_flag::EXIT) ? "exit" : "host",
-            has_flag(protocol_flag::QUIC_TUNNEL) ? "/quic" : "/no-quic",
-            has_flag(protocol_flag::IPV4) ? "/ipv4" : "/no-ipv4",
-            has_flag(protocol_flag::IPV6) ? "/ipv6" : "");
+        return "<host/{}ipv4/{}ipv6>"_format(
+            has_flag(protocol_flag::IPV4) ? "" : "no-", has_flag(protocol_flag::IPV6) ? "" : "no-");
     }
     namespace net
     {

@@ -2,6 +2,8 @@
 
 namespace srouter::sys
 {
-    NOP_SystemLayerHandler _manager{};
-    I_SystemLayerManager* const service_manager = &_manager;
+    // This platform has no native service manager, so installing leaves the core default (no-op)
+    // handler in place.
+    void install_native_service_manager() {}
+
 }  // namespace srouter::sys
