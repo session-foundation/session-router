@@ -107,6 +107,9 @@ namespace srouter
 
         constexpr auto ss_context_key = "srouter session context"sv;
 
+        constexpr auto path_build_personal = "srouter_path_v01"sv;
+        static_assert(path_build_personal.size() == crypto_generichash_blake2b_PERSONALBYTES);
+
         template <typename... More>
         void hash_add(crypto_generichash_blake2b_state& st, std::span<const std::byte> part, More&&... args)
         {
@@ -163,5 +166,25 @@ namespace srouter
         key_in.assign(is_initiator ? k2 : k1);
 
         return keys;
+    }
+
+    SymmKey path_build_secret(const X25519KeyPair& local, const X25519PubKey& remote, bool is_client)
+    {
+        const auto& A = is_client ? local.pub : remote;
+        const auto& B = is_client ? remote : local.pub;
+
+        crypto_generichash_blake2b_state st;
+        crypto_generichash_blake2b_init_salt_personal(
+            &st,
+            nullptr,
+            0,
+            SymmKey::size(),
+            nullptr,
+            reinterpret_cast<const unsigned char*>(path_build_personal.data()));
+        hash_add(st, A, B, local.sec * remote);
+
+        SymmKey key;
+        crypto_generichash_blake2b_final(&st, key.udata(), key.size());
+        return key;
     }
 }  // namespace srouter

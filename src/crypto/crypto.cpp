@@ -107,13 +107,22 @@ namespace srouter::crypto
         crypto_stream_xchacha20_xor(d, d, buf.size(), nonce.udata(), secret.udata());
     }
 
-    void xchacha20_poly1305_encrypt_inplace(std::span<std::byte> buf, const SymmKey& secret, const SymmNonce& nonce)
+    void xchacha20_poly1305_encrypt_inplace(
+        std::span<std::byte> buf, const SymmKey& secret, const SymmNonce& nonce, std::span<const std::byte> ad)
     {
         assert(buf.size() >= TAG_SIZE);
         auto payload_size = buf.size() - TAG_SIZE;
         auto* buf_cptr = reinterpret_cast<unsigned char*>(buf.data());
         crypto_aead_xchacha20poly1305_ietf_encrypt(
-            buf_cptr, nullptr, buf_cptr, payload_size, nullptr, 0, nullptr, nonce.udata(), secret.udata());
+            buf_cptr,
+            nullptr,
+            buf_cptr,
+            payload_size,
+            reinterpret_cast<const unsigned char*>(ad.data()),
+            ad.size(),
+            nullptr,
+            nonce.udata(),
+            secret.udata());
     }
 
     void xchacha20_poly1305_encrypt_inplace(std::string& buf, const SymmKey& secret, const SymmNonce& nonce)
@@ -123,7 +132,7 @@ namespace srouter::crypto
     }
 
     std::optional<std::span<std::byte>> xchacha20_poly1305_decrypt_inplace(
-        std::span<std::byte> buf, const SymmKey& secret, const SymmNonce& nonce)
+        std::span<std::byte> buf, const SymmKey& secret, const SymmNonce& nonce, std::span<const std::byte> ad)
     {
         if (buf.size() < TAG_SIZE)
         {
@@ -134,7 +143,15 @@ namespace srouter::crypto
         auto* buf_cptr = reinterpret_cast<unsigned char*>(buf.data());
         unsigned long long payload_size{0};
         if (crypto_aead_xchacha20poly1305_ietf_decrypt(
-                buf_cptr, &payload_size, nullptr, buf_cptr, buf.size(), nullptr, 0, nonce.udata(), secret.udata())
+                buf_cptr,
+                &payload_size,
+                nullptr,
+                buf_cptr,
+                buf.size(),
+                reinterpret_cast<const unsigned char*>(ad.data()),
+                ad.size(),
+                nonce.udata(),
+                secret.udata())
             != 0)
         {
             log::warning(logcat, "Decryption of {}B ciphertext failed", buf.size());
