@@ -30,7 +30,11 @@ namespace srouter::crypto
     /// That is: this encrypts `[buf.begin(), buf.end() - TAG_SIZE)` and writes the encrypted value
     /// and tag into `[buf.begin(), buf.end())`.  Any existing data in the last TAG_SIZE bytes is
     /// ignored and overwritten.
-    void xchacha20_poly1305_encrypt_inplace(std::span<std::byte> buf, const SymmKey& secret, const SymmNonce& nonce);
+    ///
+    /// `ad`, if non-empty, is additional data that is authenticated by the tag but not encrypted
+    /// or included in the output; the same `ad` must be given when decrypting.
+    void xchacha20_poly1305_encrypt_inplace(
+        std::span<std::byte> buf, const SymmKey& secret, const SymmNonce& nonce, std::span<const std::byte> ad = {});
     void xchacha20_poly1305_encrypt_inplace(std::string& buf, const SymmKey& secret, const SymmNonce& nonce);
 
     /// Encrypts a value, allocating a new vector to hold it.
@@ -40,9 +44,9 @@ namespace srouter::crypto
     /// decrypts a buffer in-place, validating it against the embedded authentication tag in the
     /// last TAG_SIZE bytes of the input.  Returns std::nullopt if decryption fails, otherwise it
     /// overwrites first N-TAG_SIZE bytes of buf with the decrypted value and returns a subspan of
-    /// that data.
+    /// that data.  `ad` is the additional data, if any, that was given when encrypting.
     std::optional<std::span<std::byte>> xchacha20_poly1305_decrypt_inplace(
-        std::span<std::byte> buf, const SymmKey& secret, const SymmNonce& nonce);
+        std::span<std::byte> buf, const SymmKey& secret, const SymmNonce& nonce, std::span<const std::byte> ad = {});
 
     /// Decryption with allocation of the output buffer.  Returns nullopt if decryption fails.
     [[nodiscard]] std::optional<std::vector<std::byte>> xchacha20_poly1305_decrypt(

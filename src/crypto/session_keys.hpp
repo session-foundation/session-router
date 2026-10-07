@@ -7,7 +7,8 @@
 
 namespace srouter
 {
-    // X25519 keys: these are used (along with ML-KEM) for session secret key negotiation.
+    // X25519 keys: these are used (along with ML-KEM) for session secret key negotiation, and for
+    // the per-hop shared secrets of v1 path build frames.
     struct X25519PubKey : public AlignedBuffer<32>
     {
         using AlignedBuffer<32>::AlignedBuffer;
@@ -133,5 +134,18 @@ namespace srouter
         const MLKEM768PubKey& M,
         uint32_t tag_i,
         uint32_t tag_r);
+
+    // Computes the shared secret for one hop of a v1 path build frame:
+    //
+    //        K = blake2b_32(A || B || aB, personal="srouter_path_v01")
+    //
+    // - A is the client's single-use ephemeral X25519 pubkey for this hop
+    // - B is the relay's X25519 pubkey (i.e. the X25519 conversion of its Ed25519 RouterID)
+    //
+    // `local` is a/A on the client and b/B on the relay; `remote` is the other side's pubkey (B or
+    // A, respectively); `is_client` disambiguates the two.
+    //
+    // Throws std::runtime_error if the DH fails (i.e. if the remote pubkey is a low-order point).
+    [[nodiscard]] SymmKey path_build_secret(const X25519KeyPair& local, const X25519PubKey& remote, bool is_client);
 
 }  // namespace srouter
