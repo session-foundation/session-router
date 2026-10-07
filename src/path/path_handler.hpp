@@ -228,9 +228,10 @@ namespace srouter
           public:
             // Counterpart to path_build_onion that decrypts a single path build frame; this is only
             // actually called from link_manager.cpp, but is here to be alongside the
-            // path_build_onion that builds the frames.
+            // path_build_onion that builds the frames.  Returns the hop and the nonce with which
+            // to de-onion the frames that follow this one.
             static std::pair<std::shared_ptr<path::TransitHop>, SymmNonce> decrypt_build_frame(
-                std::span<const std::byte, path::BUILD_FRAME_SIZE> frame,
+                std::span<const std::byte> frame,
                 const Router& r,
                 const std::variant<RouterID, quic::ConnectionID>& src,
                 sys_ms now);
