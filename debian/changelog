@@ -1,3 +1,17 @@
+session-router (1.1.0~rc2-1) unstable; urgency=medium
+
+  * require latest libquic
+  * Migrate CI from .drone.jsonnet to Woodpecker Starlark
+  * Upload the static arm64 build as linux-arm64
+  * Build the static releases for their architecture, not the CI machine
+  * Install the clang-format version the lint check uses
+  * Require libquic 1.12.0
+  * Add optional associated data to the in-place AEAD helpers
+  * Add path build v1 key derivation and cache the relay's X25519 keys
+  * Add authenticated v1 path build frames
+
+ -- Jason Rhinelander <jason@session.foundation>  Wed, 07 Oct 2026 18:51:11 -0300
+
 session-router (1.1.0~rc1-1) unstable; urgency=medium
 
   [ Jason Rhinelander ]
