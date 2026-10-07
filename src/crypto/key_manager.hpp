@@ -2,6 +2,7 @@
 
 #include "constants/files.hpp"
 #include "contact/router_id.hpp"
+#include "session_keys.hpp"
 
 namespace srouter
 {
@@ -23,11 +24,15 @@ namespace srouter
 
         Ed25519SecretKey secret_key;
         RouterID public_key;
+        X25519KeyPair x25519_keys;
 
         void update_idkey(Ed25519SecretKey&& newkey);
 
       public:
         const RouterID& router_id() const { return public_key; }
+
+        // The X25519 conversion of the identity keypair (only set on relays).
+        const X25519KeyPair& x25519() const { return x25519_keys; }
 
         // Helper functions to load a key; these are used by KeyManager itself, but are exposed as
         // they also have some uses for key loading outside KeyManager.  Loading accepts either 64

@@ -92,6 +92,7 @@ namespace srouter
     {
         secret_key = std::move(newkey);
         public_key.assign(secret_key.pubkey_span());
+        x25519_keys = X25519KeyPair{secret_key};
         log::info(logcat, "Relay key manager updated secret key; new public key: {}", public_key);
     }
 

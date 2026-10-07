@@ -40,6 +40,7 @@ namespace srouter::path
             hop.upstream = last ? hop.router_id : hop_rcs[i + 1].router_id();
             // First hop downstream is client's RID, the rest are the previous hop RID
             hop.downstream = i == 0 ? _router.id() : hops[i - 1].router_id;
+            hop.version = hop_rcs[i].version() >= BUILD_FRAME_V1_MIN_VERSION ? 1 : 0;
 
             // hop.shared_secret and hop.xor_nonce are not set yet: they get set via a call to
             // PathHandler::path_build_onion when we make the actual build path message (because
