@@ -296,6 +296,7 @@ namespace srouter
         rpc::IOxendClient* oxend() const { return _oxend.get(); }
 
         const Ed25519SecretKey& secret_key() const { return key_manager.secret_key; }
+        const X25519KeyPair& x25519_keys() const { return key_manager.x25519(); }
         const RouterID& id() const { return key_manager.router_id(); }
 
         Profiling& router_profiling() { return _router_profiling; }
