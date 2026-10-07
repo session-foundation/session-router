@@ -69,7 +69,8 @@ namespace srouter::path
         sys_ms expiry{sys_ms::min()};
         sys_ms last_activity{sys_ms::min()};
 
-        uint8_t version;
+        // The path build frame version (0 or 1) used to set up this hop.
+        uint8_t version{0};
         bool terminal_hop{false};
 
         // Will be set to true immediately before being dropped from the path_context container;
