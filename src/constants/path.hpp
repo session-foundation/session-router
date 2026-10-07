@@ -2,8 +2,11 @@
 
 #include "util/time.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 
 namespace srouter::path
 {
@@ -17,8 +20,25 @@ namespace srouter::path
     /// cannot tell how long the path was).
     inline constexpr int BUILD_LENGTH = 8;
 
-    /// Length of each frame of a path build.
-    inline constexpr size_t BUILD_FRAME_SIZE = 169;
+    /// A path build is BUILD_LENGTH frames of equal size F, where F may be anywhere from
+    /// BUILD_FRAME_SIZE_MIN to BUILD_FRAME_SIZE_MAX.  The format of each frame is determined by its
+    /// first byte (after de-onioning) rather than by F, so that one build can mix frame versions:
+    ///
+    /// - 'd' -- v0: a bt-encoded frame (see path_build_onion) which requires that F be exactly
+    ///   BUILD_FRAME_SIZE_V0.
+    /// - 0x01 -- v1: a packed frame which requires F >= BUILD_FRAME_SIZE_V1; bytes beyond that are
+    ///   ignored.
+    inline constexpr size_t BUILD_FRAME_SIZE_V0 = 169;
+    inline constexpr size_t BUILD_FRAME_SIZE_V1 = 115;
+    inline constexpr size_t BUILD_FRAME_SIZE_MIN = BUILD_FRAME_SIZE_V1;
+    inline constexpr size_t BUILD_FRAME_SIZE_MAX = 256;
+
+    /// The frame size we use when building paths.  This has to stay at BUILD_FRAME_SIZE_V0 until
+    /// v0-only relays are no longer on the network, as they accept nothing else.
+    inline constexpr size_t BUILD_FRAME_SIZE = BUILD_FRAME_SIZE_V0;
+
+    /// Relays with a RC version at least this value understand v1 path build frames.
+    inline constexpr std::array<uint8_t, 3> BUILD_FRAME_V1_MIN_VERSION{1, 1, 0};
 
     /// Max base lifetime of paths.  This is the lifetime of outbound paths, and is the maximum
     /// target lifetime of inbound paths.  Inbound paths also have up some random fuzz added to
@@ -33,6 +53,10 @@ namespace srouter::path
     /// The maximum path life accepted by a relay: this is the maximum life plus the maximum amount
     /// of random fuzz.
     inline constexpr std::chrono::seconds MAX_LIFETIME_ACCEPTED = MAX_LIFETIME + MAX_LIFETIME_FUZZ;
+
+    static_assert(
+        MAX_LIFETIME_ACCEPTED.count() <= std::numeric_limits<uint16_t>::max(),
+        "v1 path build frames encode the path lifetime as a 16-bit value");
 
     /// The minimum expiry time slots for inbound paths.  See detailed comments in
     /// SessionEndpoint::update_paths().

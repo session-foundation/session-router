@@ -2,6 +2,7 @@
 
 #include "constants/path.hpp"
 #include "crypto/crypto.hpp"
+#include "crypto/session_keys.hpp"
 #include "link/link_manager.hpp"
 #include "messages/common.hpp"
 #include "nodedb.hpp"
@@ -18,6 +19,8 @@
 #include <nlohmann/json.hpp>
 #include <sodium/randombytes.h>
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <functional>
 #include <random>
@@ -466,11 +469,132 @@ namespace srouter::path
         return (2 + key_len /*n:KEY*/) + (value_len < 10 ? 2 : value_len < 100 ? 3 : 4) + value_len /*NN:DATA*/;
     }
     static_assert(
-        BUILD_FRAME_SIZE
+        BUILD_FRAME_SIZE_V0
         == 2 /*de*/ + bt_pair_bytes(PubKey::SIZE) /*k*/ + bt_pair_bytes(SymmNonce::SIZE) /*n*/ + /*x*/
             bt_pair_bytes(
                 2 /*de*/ + bt_pair_bytes(sizeof(uint32_t)) /*l*/ + bt_pair_bytes(HopID::SIZE) /*r*/
                 + bt_pair_bytes(HopID::SIZE) /*t*/ + bt_pair_bytes(RouterID::SIZE) /*u*/));
+
+    namespace frame_v1
+    {
+        constexpr std::byte VERSION{0x01};
+        constexpr size_t PUBKEY_OFFSET = 1;
+        constexpr size_t RECORD_OFFSET = PUBKEY_OFFSET + X25519PubKey::SIZE;
+
+        // Offsets within the (decrypted) record:
+        constexpr size_t RXID_OFFSET = sizeof(uint16_t);
+        constexpr size_t TXID_OFFSET = RXID_OFFSET + HopID::SIZE;
+        constexpr size_t UPSTREAM_OFFSET = TXID_OFFSET + HopID::SIZE;
+        constexpr size_t RECORD_SIZE = UPSTREAM_OFFSET + RouterID::SIZE;
+
+        static_assert(BUILD_FRAME_SIZE_V1 == RECORD_OFFSET + RECORD_SIZE + crypto::TAG_SIZE);
+    }  // namespace frame_v1
+
+    /** Writes a v0 path build frame for `hop` into `frame`, which must be exactly
+        BUILD_FRAME_SIZE_V0 bytes, and sets the hop's shared secret and xor nonce.  Returns the
+        nonce with which to onion the frames that follow this one.
+
+        - Generate an Ed keypair for the hop (`eph_key`)
+        - Generate a symmetric nonce for subsequent DH
+        - Derive the shared secret (`hop.shared`) for DH key-exchange using the Ed keypair, hop pubkey, and
+            symmetric nonce
+        - Encrypt the hop info in-place using `hop.shared` and the generated symmetric nonce from DH
+        - Generate the XOR nonce by hashing the symmetric key from DH (`hop.shared`) and truncating
+
+        Bt-encoded contents:
+        - 'k' : ephemeral pubkey used to derive DH shared secret for this hop
+        - 'n' : nonce used for DH secret calculation *and* for the encrypted payload (next item)
+        - 'x' : encrypted payload
+            - 'l' : path lifetime in seconds, as a 4-byte, little-endian encoded integer (because we require an
+       exact size)
+            - 'r' : rxID (the path ID for messages going *to* the hop)
+            - 't' : txID (the path ID for messages coming *from* the client/path origin)
+            - 'u' : upstream hop RouterID
+    */
+    static SymmNonce encode_frame_v0(TransitHop& hop, std::span<std::byte> frame, uint32_t lifetime)
+    {
+        auto lifetime_le = oxenc::host_to_little(lifetime);
+        std::span<const std::byte, 4> lifetime_encoded{reinterpret_cast<const std::byte*>(&lifetime_le), 4};
+
+        std::string hop_payload;
+        {
+            oxenc::bt_dict_producer info;
+            info.append("l", lifetime_encoded);
+            info.append("r", hop.rxid.to_view());
+            info.append("t", hop.txid.to_view());
+            info.append("u", hop.upstream.to_view());
+            hop_payload = std::move(info).str();
+        }
+
+        auto dh_nonce = SymmNonce::make_random();
+        auto eph_key = Ed25519SecretKey::generate();
+
+        if (!crypto::dh_client(hop.shared_secret, hop.router_id, eph_key, dh_nonce))
+            throw std::runtime_error{"Client DH failed for hop with rid {}"_format(hop.router_id)};
+
+        hop.xor_nonce.assign(crypto::shorthash(hop.shared_secret).first<SymmNonce::SIZE>());
+
+        crypto::xchacha20(as_bspan(hop_payload), hop.shared_secret, dh_nonce);
+
+        oxenc::bt_dict_producer btdp;
+        btdp.append("k", eph_key.pubkey_span());
+        btdp.append("n", dh_nonce.span());
+        btdp.append("x", hop_payload);
+        auto encoded = btdp.view();
+
+        if (encoded.size() != frame.size())
+        {
+            assert(encoded.size() == frame.size());
+            log::critical(logcat, "Internal error: unexpected path build frame size!");
+            throw std::runtime_error{"Internal error: frame size mismatch in path build!"};
+        }
+
+        std::memcpy(frame.data(), encoded.data(), encoded.size());
+
+        return dh_nonce ^ hop.xor_nonce;
+    }
+
+    /** Writes a v1 path build frame for `hop` into `frame`, which must be at least
+        BUILD_FRAME_SIZE_V1 bytes, and sets the hop's shared secret and xor nonce.  Returns the
+        nonce with which to onion the frames that follow this one.
+
+        Frame contents:
+        - 0x01 version byte
+        - A: 32-byte single-use ephemeral X25519 pubkey
+        - 82-byte encrypted record, encrypted with XChaCha20-Poly1305 using K = path_build_secret(a,
+          B), a zero nonce (K is never reused), and the version byte as additional data:
+            - path lifetime in seconds (2 bytes, little-endian)
+            - rxID (16 bytes)
+            - txID (16 bytes)
+            - upstream hop RouterID (32 bytes)
+            - Poly1305 tag (16 bytes)
+        - random padding up to the frame size
+
+        The xor nonce is the truncated hash of K, and is also the nonce for onioning the frames
+        that follow.
+    */
+    static SymmNonce encode_frame_v1(TransitHop& hop, std::span<std::byte> frame, uint32_t lifetime)
+    {
+        assert(frame.size() >= BUILD_FRAME_SIZE_V1);
+
+        auto eph = X25519KeyPair::generate();
+        hop.shared_secret = path_build_secret(eph, X25519PubKey{hop.router_id}, true);
+        hop.xor_nonce.assign(crypto::shorthash(hop.shared_secret).first<SymmNonce::SIZE>());
+
+        frame[0] = frame_v1::VERSION;
+        eph.pub.copy_to(frame.subspan<frame_v1::PUBKEY_OFFSET, X25519PubKey::SIZE>());
+
+        auto record = frame.subspan<frame_v1::RECORD_OFFSET, frame_v1::RECORD_SIZE + crypto::TAG_SIZE>();
+        oxenc::write_host_as_little(static_cast<uint16_t>(lifetime), record.data());
+        hop.rxid.copy_to(record.subspan<frame_v1::RXID_OFFSET, HopID::SIZE>());
+        hop.txid.copy_to(record.subspan<frame_v1::TXID_OFFSET, HopID::SIZE>());
+        hop.upstream.copy_to(record.subspan<frame_v1::UPSTREAM_OFFSET, RouterID::SIZE>());
+        crypto::xchacha20_poly1305_encrypt_inplace(record, hop.shared_secret, SymmNonce{}, frame.first(1));
+
+        random_fill(frame.subspan(BUILD_FRAME_SIZE_V1));
+
+        return hop.xor_nonce;
+    }
 
     std::vector<std::byte> PathHandler::path_build_onion(Path& path)
     {
@@ -488,10 +612,7 @@ namespace srouter::path
         auto& path_hops = path.hops;
         int n_hops = static_cast<int>(path.num_hops());
 
-        auto path_expiry = oxenc::host_to_little(
-            static_cast<uint32_t>(std::chrono::round<std::chrono::seconds>(path.expires_in()).count()));
-        std::span<const std::byte, 4> path_expiry_encoded{
-            reinterpret_cast<const std::byte*>(&path_expiry), sizeof(path_expiry)};
+        auto lifetime = static_cast<uint32_t>(std::chrono::round<std::chrono::seconds>(path.expires_in()).count());
 
         if (n_hops < BUILD_LENGTH)
         {
@@ -513,64 +634,15 @@ namespace srouter::path
 
         for (int i = n_hops - 1; i >= 0; --i)
         {
-            /** For each hop:
-                - Generate an Ed keypair for the hop (`shared_key`)
-                - Generate a symmetric nonce for subsequent DH
-                - Derive the shared secret (`hop.shared`) for DH key-exchange using the Ed keypair, hop pubkey, and
-                    symmetric nonce
-                - Encrypt the hop info in-place using `hop.shared` and the generated symmetric nonce from DH
-                - Generate the XOR nonce by hashing the symmetric key from DH (`hop.shared`) and truncating
-
-                Bt-encoded contents:
-                - 'k' : ephemeral pubkey used to derive DH shared secret for this hop
-                - 'n' : nonce used for DH secret calculation *and* for the encrypted payload (next item)
-                - 'x' : encrypted payload
-                    - 'l' : path lifetime in seconds, as a 4-byte, little-endian encoded integer (because we require an
-               exact size)
-                    - 'r' : rxID (the path ID for messages going *to* the hop)
-                    - 't' : txID (the path ID for messages coming *from* the client/path origin)
-                    - 'u' : upstream hop RouterID
-
-                All of these frames are inserted sequentially into the list and padded with any needed dummy frames
-            */
-            // TODO FIXME: poly1305 MAC for path build encryption
             auto& hop = path_hops[i];
+            auto frame = rspan.subspan(i * BUILD_FRAME_SIZE, BUILD_FRAME_SIZE);
 
-            std::string hop_payload;
-            {
-                oxenc::bt_dict_producer info;
-                info.append("l", path_expiry_encoded);
-                info.append("r", hop.rxid.to_view());
-                info.append("t", hop.txid.to_view());
-                info.append("u", hop.upstream.to_view());
-                hop_payload = std::move(info).str();
-            }
+            if (hop.version == 0 && BUILD_FRAME_SIZE != BUILD_FRAME_SIZE_V0)
+                throw std::logic_error{"Cannot build a v0 frame for hop[{}] ({}) with {}-byte frames"_format(
+                    i, hop.router_id, BUILD_FRAME_SIZE)};
 
-            auto dh_nonce = SymmNonce::make_random();
-            auto eph_key = Ed25519SecretKey::generate();
-
-            if (!crypto::dh_client(hop.shared_secret, hop.router_id, eph_key, dh_nonce))
-                throw std::runtime_error{"Client DH failed for hop[{}] with rid {}"_format(i, hop.router_id)};
-
-            hop.xor_nonce.assign(crypto::shorthash(hop.shared_secret).first<SymmNonce::SIZE>());
-
-            crypto::xchacha20(as_bspan(hop_payload), hop.shared_secret, dh_nonce);
-
-            oxenc::bt_dict_producer btdp;
-            btdp.append("k", eph_key.pubkey_span());
-            btdp.append("n", dh_nonce.span());
-            btdp.append("x", hop_payload);
-            auto frame = btdp.view();
-
-            if (frame.size() != BUILD_FRAME_SIZE)
-            {
-                assert(frame.size() == BUILD_FRAME_SIZE);
-                log::critical(logcat, "Internal error: unexpected path build frame size!");
-                throw std::runtime_error{"Internal error: frame size mismatch in path build!"};
-            }
-
-            auto mine = rspan.subspan(i * BUILD_FRAME_SIZE, BUILD_FRAME_SIZE);
-            std::memcpy(mine.data(), frame.data(), BUILD_FRAME_SIZE);
+            auto onion_nonce =
+                hop.version == 0 ? encode_frame_v0(hop, frame, lifetime) : encode_frame_v1(hop, frame, lifetime);
 
             if (auto following_frames = n_hops - 1 - i; following_frames > 0)
                 // We only onion the real frames that follow this one, not the junk frames, because
@@ -582,7 +654,7 @@ namespace srouter::path
                 crypto::xchacha20(
                     rspan.subspan((i + 1) * BUILD_FRAME_SIZE, following_frames * BUILD_FRAME_SIZE),
                     hop.shared_secret,
-                    dh_nonce ^ hop.xor_nonce);
+                    onion_nonce);
         }
 
         router.path_builds.attempts++;
@@ -590,21 +662,18 @@ namespace srouter::path
         return result;
     }
 
-    // Constructs a TransitHop from a serialized path build frame, i.e. undoing one layer of the
-    // path build onioning, above.  Returns the constructed TransitHop and the dh_nonce for the path
-    // build.
-    std::pair<std::shared_ptr<path::TransitHop>, SymmNonce> PathHandler::decrypt_build_frame(
-        std::span<const std::byte, path::BUILD_FRAME_SIZE> frame,
-        const Router& r,
-        const std::variant<RouterID, quic::ConnectionID>& src,
-        sys_ms now)
+    // Decodes a v0 frame (see encode_frame_v0) into `hop`; returns the nonce for de-onioning the
+    // following frames.
+    static SymmNonce decode_frame_v0(TransitHop& hop, std::span<const std::byte> frame, const Router& r, sys_ms now)
     {
-        std::pair<std::shared_ptr<path::TransitHop>, SymmNonce> ret;
-        auto& [hop_ptr, dh_nonce] = ret;
-        auto& hop = *(hop_ptr = std::make_shared<path::TransitHop>());
-        hop.downstream = src;
+        if (frame.size() != BUILD_FRAME_SIZE_V0)
+        {
+            log::info(logcat, "Invalid v0 path build frame size {} != {}", frame.size(), BUILD_FRAME_SIZE_V0);
+            throw path::TransitHopError::INVALID_DATA();
+        }
 
         PubKey eph_pubkey;
+        SymmNonce dh_nonce;
         std::vector<std::byte> payload;
         try
         {
@@ -635,12 +704,9 @@ namespace srouter::path
         {
             oxenc::bt_dict_consumer inner{std::move(payload)};
 
-            std::chrono::seconds lifetime{
-                oxenc::load_little_to_host<uint32_t>(inner.require_span<std::byte, sizeof(uint32_t)>("l").data())};
-            if (lifetime > path::MAX_LIFETIME_ACCEPTED)
-                throw std::runtime_error{"Path lifetime {} exceeds maximum allowed path lifetime {}"_format(
-                    lifetime, path::MAX_LIFETIME_ACCEPTED)};
-            hop.expiry = now + lifetime;
+            hop.expiry = now
+                + std::chrono::seconds{
+                    oxenc::load_little_to_host<uint32_t>(inner.require_span<std::byte, sizeof(uint32_t)>("l").data())};
             hop.rxid.assign(inner.require_span<std::byte, HopID::SIZE>("r"));
             hop.txid.assign(inner.require_span<std::byte, HopID::SIZE>("t"));
             hop.upstream.assign(inner.require_span<std::byte, RouterID::SIZE>("u"));
@@ -649,6 +715,71 @@ namespace srouter::path
         {
             log::warning(logcat, "TransitHop caught bt parsing exception: {}", e.what());
             throw path::TransitHopError::INVALID_PAYLOAD();
+        }
+
+        return dh_nonce ^ hop.xor_nonce;
+    }
+
+    // Decodes a v1 frame (see encode_frame_v1) into `hop`; returns the nonce for de-onioning the
+    // following frames.  The tag is verified before any field of the record is used.
+    static SymmNonce decode_frame_v1(TransitHop& hop, std::span<const std::byte> frame, const Router& r, sys_ms now)
+    {
+        if (frame.size() < BUILD_FRAME_SIZE_V1)
+        {
+            log::info(logcat, "Invalid v1 path build frame size {} < {}", frame.size(), BUILD_FRAME_SIZE_V1);
+            throw path::TransitHopError::INVALID_DATA();
+        }
+
+        X25519PubKey eph_pubkey{frame.subspan<frame_v1::PUBKEY_OFFSET, X25519PubKey::SIZE>()};
+        try
+        {
+            hop.shared_secret = path_build_secret(r.x25519_keys(), eph_pubkey, false);
+        }
+        catch (const std::exception& e)
+        {
+            log::warning(logcat, "Failed to derive shared secret: {}", e.what());
+            throw path::TransitHopError::DH_PUBKEY();
+        }
+
+        std::array<std::byte, frame_v1::RECORD_SIZE + crypto::TAG_SIZE> record;
+        std::ranges::copy(frame.subspan<frame_v1::RECORD_OFFSET, record.size()>(), record.begin());
+        if (!crypto::xchacha20_poly1305_decrypt_inplace(record, hop.shared_secret, SymmNonce{}, frame.first(1)))
+            throw path::TransitHopError::INVALID_PAYLOAD();
+
+        std::span rec{record};
+        hop.expiry = now + std::chrono::seconds{oxenc::load_little_to_host<uint16_t>(rec.data())};
+        hop.rxid.assign(rec.subspan<frame_v1::RXID_OFFSET, HopID::SIZE>());
+        hop.txid.assign(rec.subspan<frame_v1::TXID_OFFSET, HopID::SIZE>());
+        hop.upstream.assign(rec.subspan<frame_v1::UPSTREAM_OFFSET, RouterID::SIZE>());
+        hop.xor_nonce.assign(crypto::shorthash(hop.shared_secret).first<SymmNonce::SIZE>());
+        hop.version = 1;
+
+        return hop.xor_nonce;
+    }
+
+    // Constructs a TransitHop from a serialized path build frame, i.e. undoing one layer of the
+    // path build onioning, above.  The frame version is determined by its first byte.
+    std::pair<std::shared_ptr<path::TransitHop>, SymmNonce> PathHandler::decrypt_build_frame(
+        std::span<const std::byte> frame,
+        const Router& r,
+        const std::variant<RouterID, quic::ConnectionID>& src,
+        sys_ms now)
+    {
+        std::pair<std::shared_ptr<path::TransitHop>, SymmNonce> ret;
+        auto& [hop_ptr, onion_nonce] = ret;
+        auto& hop = *(hop_ptr = std::make_shared<path::TransitHop>());
+        hop.downstream = src;
+
+        if (frame.empty())
+            throw path::TransitHopError::INVALID_DATA();
+        if (frame[0] == std::byte{'d'})
+            onion_nonce = decode_frame_v0(hop, frame, r, now);
+        else if (frame[0] == frame_v1::VERSION)
+            onion_nonce = decode_frame_v1(hop, frame, r, now);
+        else
+        {
+            log::info(logcat, "Unknown path build frame version byte 0x{:02x}", static_cast<uint8_t>(frame[0]));
+            throw path::TransitHopError::INVALID_DATA();
         }
 
         // If we are a terminal hop then two things must be true: upstream must be this router, and
