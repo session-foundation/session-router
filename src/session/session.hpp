@@ -149,9 +149,6 @@ namespace srouter
 
         class Session
         {
-            // TODO FIXME: how long since last use should is_expired() return true?
-            static constexpr std::chrono::milliseconds SESSION_TIMEOUT = 30s;
-
             friend struct TCPTunnel;
             template <typename T>
             friend bool check_dead(std::shared_ptr<T>& path_like, Session& s);
@@ -242,6 +239,9 @@ namespace srouter
             virtual ~Session();
 
           public:
+            // TODO FIXME: how long since last use should is_expired() return true?
+            static constexpr std::chrono::milliseconds SESSION_TIMEOUT = 30s;
+
             // Non-movable, non-copyable:
             Session(Session&&) = delete;
             Session(const Session&) = delete;
@@ -328,9 +328,17 @@ namespace srouter
 
             void handle_udp_from_remote(IPPacket&& pkt);
 
-            uint16_t setup_udp_mapping(uint16_t dest_port);
+            // Returns this session's TCP tunnel, constructing it on first use: most sessions never
+            // carry tunnelled TCP and should not pay for a QUIC endpoint they will not use.
+            TCPTunnel& tunnel();
 
-            uint16_t map_tcp_remote_port(uint16_t dest_port);
+            // The TCP tunnel if this session has one, without creating one.
+            TCPTunnel* maybe_tunnel() { return tcp_tunnel.get(); }
+
+            // Whether the remote advertises that it can terminate tunnelled TCP streams.  nullopt
+            // means we have no client contact for the remote yet and so cannot tell, in which case a
+            // caller may go ahead and find out the hard way.
+            virtual std::optional<bool> remote_accepts_tcp() const { return std::nullopt; }
 
             // Returns true if this session is established, and has not been explicitly closed.
             // Inbound sessions are instantly established; outbound sessions are established once
@@ -549,6 +557,7 @@ namespace srouter
 
             void select_new_current() override;
             bool use_old_init() const override;
+            std::optional<bool> remote_accepts_tcp() const override;
 
           protected:
             void handle_client_contact(std::span<const std::byte> payload) override;

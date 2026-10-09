@@ -68,6 +68,7 @@ session_router_add_library(session-router-core
   router/router.cpp
 
   session/session.cpp
+  session/tcp_tunnel.cpp
 )
 
 if (SROUTER_FULL)

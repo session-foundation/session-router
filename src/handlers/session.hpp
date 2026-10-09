@@ -3,6 +3,7 @@
 #include "address/address.hpp"
 #include "config/config.hpp"
 #include "contact/client_contact.hpp"
+#include "ev/tcp.hpp"
 #include "path/path_handler.hpp"
 #include "path/transit_hop.hpp"
 #include "session/session.hpp"
@@ -146,6 +147,26 @@ namespace srouter
             // can safely ask for the same remote:port again and just get the existing one rather
             // than a new listening socket.
             std::unordered_map<mapped_remote, udp_handle, mapped_remote::hash> _udp_handles;
+
+            struct tcp_handle
+            {
+                std::shared_ptr<TCPHandle> listener;
+
+                // How many callers currently hold this mapping, exactly as for udp_handle: the
+                // mapping is torn down by the last holder to release it, not the first.
+                int holders = 0;
+            };
+
+            // Established embedded client TCP maps: {remote:port} -> listener.  The listener lives
+            // here rather than on the session because it has to outlive session churn: the tunnel
+            // beneath it can come and go (a dead path, an idle teardown, a session timing out)
+            // without the port the application was handed changing underneath it.
+            std::unordered_map<mapped_remote, tcp_handle, mapped_remote::hash> _tcp_handles;
+
+            // Pairs a newly accepted connection on a mapped local TCP port with a stream to the
+            // remote, obtaining (or re-establishing) the session as needed.  Returns nullptr if it
+            // cannot be tunnelled, in which case the local connection is dropped.
+            TCPConnection* tunnel_tcp_connection(const mapped_remote& target, bufferevent* bev, TCPConnection::fd_t fd);
 
             uint16_t _next_udp_client_port{0};
 
@@ -368,6 +389,31 @@ namespace srouter
             // Removes a mapping previously established with map_udp_remote_port; this closes the
             // socket and forgets any previous connection mappings.
             void unmap_udp_remote_port(const NetworkAddress& remote, uint16_t port);
+
+            // TCP port mapping, for embedded clients.  This is the TCP counterpart of
+            // map_udp_remote_port: it starts constructing a session to the given remote and listens
+            // on an IPv6 localhost (i.e. `[::1]`) random port, where each connection the application
+            // makes becomes one stream of a QUIC connection tunnelled through the session, and is
+            // terminated by the remote into a TCP connection to `port` on its own tun address.
+            //
+            // Returns the same pair as map_udp_remote_port: the local port to connect to, and the
+            // session (so a caller can hook its establishment).
+            //
+            // Returns nullopt, mapping nothing, if the remote is known to be unreachable, or if the
+            // remote's client contact says it does not accept tunnelled TCP: no session could carry
+            // what the port would receive.  A remote whose contact we do not have yet is *not*
+            // refused here, since we cannot yet tell.
+            //
+            // Throws (via initiate_remote_session) if the session could not be initiated, such as
+            // when given an invalid pubkey in `remote`.
+            std::optional<std::pair<uint16_t, std::shared_ptr<session::Session>>> map_tcp_remote_port(
+                const NetworkAddress& remote, uint16_t port);
+
+            // Removes a mapping previously established with map_tcp_remote_port once its last
+            // holder releases it, closing both the listener and any connections established through
+            // it.  Not called directly by applications: the public API releases mappings by
+            // destroying the tcp_tunnel claim that holds them.
+            void unmap_tcp_remote_port(const NetworkAddress& remote, uint16_t port);
         };
 
     }  // namespace handlers

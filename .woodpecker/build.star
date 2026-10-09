@@ -145,6 +145,9 @@ def full_llvm(version):
         "CMAKE_C_COMPILER": "clang-%d" % version,
         "CMAKE_CXX_COMPILER": "clang++-%d" % version,
         "CMAKE_CXX_FLAGS": "-stdlib=libc++",
+        # Any system C++ library is built against libstdc++ and so can't be linked here.  The image
+        # has our apt repo configured, so newer releases of our libraries get installed regardless.
+        "DEPS_FORCE_SUBMODULE": True,
         "FORCE_OXENLOGGING_SUBMODULE": True,
         "OXEN_LOGGING_FORCE_SUBMODULES": True,
     }
