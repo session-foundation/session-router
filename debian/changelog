@@ -1,3 +1,9 @@
+session-router (1.1.0-1~ubuntu2204+1) jammy; urgency=medium
+
+  * Link the system liboxen-logging instead of a bundled copy
+
+ -- Jason Rhinelander <jason@session.foundation>  Fri, 16 Oct 2026 22:33:58 -0300
+
 session-router (1.1.0-1~ubuntu2204) jammy; urgency=medium
 
   * Upload tag builds into a directory named for the tag
