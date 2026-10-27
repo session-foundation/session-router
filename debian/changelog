@@ -1,3 +1,16 @@
+session-router (1.1.1~rc1-1~ubuntu2604) resolute; urgency=medium
+
+  [ Morgan Pretty ]
+  * Bump libquic for the JobQueue wake race fix
+
+  [ Jason Rhinelander ]
+  * Only generate Windows .rc files for daemon executables
+  * Stop the oxend RPC client before destroying its OxenMQ
+  * Refuse path builds to an upstream relay we can't reach
+  * Cap the path build backoff at 15s
+
+ -- Jason Rhinelander <jason@session.foundation>  Mon, 26 Oct 2026 22:01:39 -0300
+
 session-router (1.1.0-1~ubuntu2604) resolute; urgency=medium
 
   * Upload tag builds into a directory named for the tag
