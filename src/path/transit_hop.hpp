@@ -26,6 +26,7 @@ namespace srouter::path
         inline static TransitHopError INVALID_HOP_ID() { return "INVALID TRANSIT HOP IDS"s; }
         inline static TransitHopError HOP_ID_UNAVAILABLE() { return "TRANSIT HOP ID ALREADY IN USE"s; }
         inline static TransitHopError INVALID_LIFETIME() { return "INVALID PATH LIFETIME"s; }
+        inline static TransitHopError UPSTREAM_UNREACHABLE() { return "UPSTREAM UNREACHABLE"s; }
     };
 
     // TransitHop holds the raw data associated with a single hop in a path, e.g. hop ids, keys,
