@@ -1106,6 +1106,19 @@ namespace srouter::session
         int needed = _target_paths - num_paths();
         if (needed <= 0)
             return;
+
+        if (cooldown())
+        {
+            log::debug(
+                logcat,
+                "OutboundRelaySession to {} needs {} more paths, but path builds are in cooldown after {} "
+                "consecutive failures",
+                _remote,
+                needed,
+                _consecutive_failures);
+            return;
+        }
+
         log::debug(
             logcat,
             "OutboundRelaySession building {} paths to remote {} to reach target path count {}",
@@ -1287,6 +1300,18 @@ namespace srouter::session
         }
         if (needed <= 0)
             return;
+
+        if (cooldown())
+        {
+            log::debug(
+                logcat,
+                "OutboundClientSession to {} needs {} more paths, but path builds are in cooldown after {} "
+                "consecutive failures",
+                _remote,
+                needed,
+                _consecutive_failures);
+            return;
+        }
 
         log::debug(
             logcat,
