@@ -917,7 +917,9 @@ namespace srouter::path
         if (_consecutive_failures < BACKOFF_THRESHOLD)
             return false;
 
-        return now < _last_failure + BACKOFF_INCREMENT * (1 + _consecutive_failures - BACKOFF_THRESHOLD);
+        auto delay = std::min<steady_ms::duration>(
+            BACKOFF_INCREMENT * (1 + _consecutive_failures - BACKOFF_THRESHOLD), BACKOFF_MAX);
+        return now < _last_failure + delay;
     }
 
     // TODO FIXME: something should be calling this!

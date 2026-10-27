@@ -31,6 +31,9 @@ namespace srouter::rpc
             throw std::runtime_error("we cannot talk to oxend while not a service node");
         }
 
+        if (_stopped)
+            return;
+
         oxenmq::address addr{url};
         log::info(logcat, "RPC client connecting to oxend at {}", addr.full_address());
 
@@ -45,6 +48,8 @@ namespace srouter::rpc
 
     void OxendRPC::command(std::string_view cmd)
     {
+        if (_stopped)
+            return;
         log::debug(logcat, "Oxend command: {}", cmd);
         _omq.send(*_conn, std::move(cmd));
     }
@@ -182,6 +187,18 @@ namespace srouter::rpc
         log::info(logcat, "Starting OxendRPC ping timer...");
         ping();
         _ping_timer = _router._jq->add_timer(PING_INTERVAL, [this] { ping(); });
+    }
+
+    void OxendRPC::stop()
+    {
+        if (_stopped.exchange(true))
+            return;
+
+        if (_ping_timer)
+        {
+            _router._jq->remove(_ping_timer);
+            _ping_timer = {};
+        }
     }
 
     void OxendRPC::handle_new_service_node_list(const nlohmann::json& j)
