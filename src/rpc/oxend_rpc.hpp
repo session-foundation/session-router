@@ -46,6 +46,8 @@ namespace srouter::rpc
 
         void start_pings() override;
 
+        void stop() override;
+
         /// triggers a service node list refresh from oxend; thread-safe and will do nothing if
         /// an update is already in progress.  The promise is for router.cpp to attempt a
         /// synchronous update on startup, and should not be used otherwise.
@@ -60,12 +62,16 @@ namespace srouter::rpc
         template <typename HandlerFunc_t, typename Args_t>
         void request(std::string_view cmd, HandlerFunc_t func, const Args_t& args)
         {
+            if (_stopped)
+                return;
             _omq.request(*_conn, std::move(cmd), std::move(func), args);
         }
 
         template <typename HandlerFunc_t>
         void request(std::string_view cmd, HandlerFunc_t func)
         {
+            if (_stopped)
+                return;
             _omq.request(*_conn, std::move(cmd), std::move(func));
         }
 
@@ -77,6 +83,8 @@ namespace srouter::rpc
         void handle_new_block(oxenmq::Message& msg);
 
         oxen::quic::TimerID _ping_timer;
+
+        std::atomic<bool> _stopped{false};
 
         std::optional<oxenmq::ConnectionID> _conn;
         oxenmq::OxenMQ& _omq;
