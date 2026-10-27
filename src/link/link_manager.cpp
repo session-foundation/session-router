@@ -721,8 +721,23 @@ namespace srouter::link
 
             const auto& upstream = hop->upstream;
 
+            // Fail now rather than leaving the build unanswered: send_command would either drop it
+            // (no RC to connect with) or queue it on a connection attempt that is very likely to
+            // fail like the ones before it, and either way the client only finds out by waiting
+            // out its full build timeout.
+            const auto* upstream_rc = router.node_db().get_rc(upstream);
+            if (!upstream_rc || endpoint.relay_unreachable(upstream))
+            {
+                log::info(
+                    logcat,
+                    "Refusing path build to upstream {}: {}",
+                    upstream,
+                    upstream_rc ? "relay is unreachable" : "no RC for relay");
+                throw path::TransitHopError::UPSTREAM_UNREACHABLE();
+            }
+
             endpoint.send_command(
-                upstream,
+                *upstream_rc,
                 "path_build",
                 std::move(frames),
                 [this, hop = std::move(hop), prev_message = std::move(m)](quic::message m) mutable {

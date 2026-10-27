@@ -25,6 +25,11 @@ namespace srouter
         /// and then increase the delay by this amount again for each additional path build failure.
         inline constexpr auto BACKOFF_INCREMENT = 1s;
 
+        /// The backoff stops growing at this delay, so that once whatever was failing the builds
+        /// recovers (our network, or the remote a session is trying to reach), we notice within
+        /// this long no matter how long it was failing for.
+        inline constexpr auto BACKOFF_MAX = 15s;
+
         class PathHandler : public std::enable_shared_from_this<PathHandler>
         {
             void path_build_backoff();
