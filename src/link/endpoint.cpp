@@ -274,6 +274,7 @@ namespace srouter::link
                     pending_outbound.erase(pit);
                 }
                 relay_bidir.erase(rid);
+                unreachable_since.erase(rid);
                 log::debug(logcat, "Dropped connection to deregistered node {}", rid);
             }
             else
@@ -377,6 +378,22 @@ namespace srouter::link
         if (include_pending and pending_outbound.contains(relay))
             return true;
         return false;
+    }
+
+    bool Endpoint::relay_unreachable(const RouterID& relay) const
+    {
+        if (relay_conns.contains(relay))
+            return false;
+        auto it = unreachable_since.find(relay);
+        return it != unreachable_since.end() && std::chrono::steady_clock::now() - it->second >= UNREACHABLE_AFTER;
+    }
+
+    void Endpoint::note_connect_failure(const RouterID& relay)
+    {
+        // An attempt can fail after the relay has connected to us inbound (e.g. if its advertised
+        // port forwards to a different relay); that says nothing about whether it is reachable.
+        if (router.is_service_node && !relay_conns.contains(relay))
+            unreachable_since.try_emplace(relay, std::chrono::steady_clock::now());
     }
 
     void Endpoint::shutdown()
@@ -693,6 +710,7 @@ namespace srouter::link
             relcon.set_conn(std::move(conn), true);
             if (relcon.outbound)
                 relay_bidir[*rid] = srouter::time_now_ms();
+            unreachable_since.erase(*rid);
 
             log::debug(
                 logcat,
@@ -739,6 +757,7 @@ namespace srouter::link
             relcon.set_conn(std::move(pit->second), false);
             if (relcon.inbound)
                 relay_bidir[rid] = srouter::time_now_ms();
+            unreachable_since.erase(rid);
 
             log::debug(
                 logcat,
@@ -888,6 +907,7 @@ namespace srouter::link
                         rid->to_network_address(true),
                         ec);
                     pending_outbound.erase(it);
+                    note_connect_failure(*rid);
                     found = true;
                 }
 
@@ -943,6 +963,7 @@ namespace srouter::link
                     && it->second->conn && it->second->conn->reference_id() == conn_refid)
                 {
                     pending_outbound.erase(it);
+                    note_connect_failure(*rid);
                     found = true;
                 }
             }
