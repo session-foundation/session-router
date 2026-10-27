@@ -979,6 +979,9 @@ namespace srouter
             if (_router_testing)
                 _router_testing->stop();
 
+            if (_oxend)
+                _oxend->stop();
+
             _session_endpoint->stop(true);
 
             if (not is_service_node)

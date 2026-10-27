@@ -24,6 +24,12 @@ namespace srouter::rpc
 
         virtual void start_pings() = 0;
 
+        // Stops the ping timer and turns every later request into a no-op.  Must be called before
+        // the oxenmq instance the client talks through is destroyed: jobs already queued on the
+        // router's job queue (such as reachability test results) can still call into the client
+        // after that point.
+        virtual void stop() = 0;
+
         virtual Ed25519SecretKey obtain_identity_key() = 0;
 
         // Connect to oxend asynchronously.  Takes the address as a string (parsed into an

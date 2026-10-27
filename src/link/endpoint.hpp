@@ -41,6 +41,14 @@ namespace srouter::link
     // longer than the longest path to allow those clients to naturally migrate to new paths.
     inline constexpr auto DEREGGED_LINGER = 30min;
 
+    // How long a relay has to have gone without any connection to us since an outbound connection
+    // attempt to it first failed before we consider it unreachable, and refuse to forward path
+    // builds to it rather than queuing them on yet another attempt that will most likely fail too.
+    // Since the first failure is only noticed when that attempt's handshake times out, the relay
+    // will have been unreachable for a while longer than this; the margin is so that a relay that
+    // was just restarting isn't written off.
+    inline constexpr auto UNREACHABLE_AFTER = 30s;
+
     static constexpr uint64_t CONN_CLOSE_REDUNDANT = 6;
 
     // Stores relay-to-relay connections.  In order to not lose stream messages, we temporarily
@@ -109,6 +117,11 @@ namespace srouter::link
         // `relay_conns` (relays).
         std::unordered_map<RouterID, std::shared_ptr<link::Connection>> pending_outbound;
 
+        // When an outbound connection attempt to each relay first closed without establishing, with
+        // no connection with it since; cleared once we have a connection with the relay in either
+        // direction.  Relay only.
+        std::unordered_map<RouterID, std::chrono::steady_clock::time_point> unreachable_since;
+
         // Stores any "dead" router IDs (i.e. unlocked or deregged) that we have connections with,
         // along with the timestamp of when we first noticed they were no longer valid.  Once we
         // reach DEREGGED_LINGER, we close the connection.
@@ -161,6 +174,15 @@ namespace srouter::link
         // Returns true if there is an established (or pending, if `include_pending`) connection to
         // the given RouterID.
         bool connected_to_relay(const RouterID& relay, bool include_pending = false) const;
+
+        // Returns true if we have no established connection with the given relay, and have had
+        // none since an outbound attempt to connect to it failed at least UNREACHABLE_AFTER ago.
+        // Relay only.
+        bool relay_unreachable(const RouterID& relay) const;
+
+        // Records a failed outbound connection attempt to a relay; only the first failure since we
+        // last had a connection with it is kept, and failures while we have one are ignored.
+        void note_connect_failure(const RouterID& relay);
 
         // Returns 5-element array of relay connection counts.  (All values are 0 if this is called
         // on a client instance):
