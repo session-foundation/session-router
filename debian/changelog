@@ -1,3 +1,17 @@
+session-router (1.1.1~rc1-1~ubuntu2204) jammy; urgency=medium
+
+  [ Morgan Pretty ]
+  * Bump libquic for the JobQueue wake race fix
+
+  [ Jason Rhinelander ]
+  * Only generate Windows .rc files for daemon executables
+  * Stop the oxend RPC client before destroying its OxenMQ
+  * Refuse path builds to an upstream relay we can't reach
+  * Cap the path build backoff at 15s
+  * Rediff patches
+
+ -- Jason Rhinelander <jason@session.foundation>  Mon, 26 Oct 2026 22:01:44 -0300
+
 session-router (1.1.0-1~ubuntu2204+1) jammy; urgency=medium
 
   * Link the system liboxen-logging instead of a bundled copy
