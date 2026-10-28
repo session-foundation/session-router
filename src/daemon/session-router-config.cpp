@@ -85,7 +85,7 @@ int main(int argc, char* argv[])
         "-H,--hidden-service",
         hidden_svc,
         "Generate a client configuration with preconfigured settings for running as a hidden service (persistent key, "
-        "disable DNS, increased inbound paths)");
+        "disable DNS, increased inbound paths, cubic congestion control)");
     mode->add_flag("-e,--embedded-config", embedded, "Generate a default config file for use with an embedded client");
     mode->add_flag("-r,--relay", relay, "Generate a relay config for use as a relay as part of a Session Node");
     mode->add_flag(
@@ -246,6 +246,7 @@ int main(int argc, char* argv[])
             {
                 extra_ini += "[paths]\ninbound-paths=8\n";
                 extra_ini += "[dns]\nlisten=\n";
+                extra_ini += "[bind]\ncongestion-control=cubic\n";
             }
 
             if (!listen_addr.empty())

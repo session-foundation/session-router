@@ -13,7 +13,9 @@
 #include "util/formattable.hpp"
 #include "util/logging/buffer.hpp"
 
+#include <charconv>
 #include <filesystem>
+#include <limits>
 #include <stdexcept>
 
 namespace srouter
@@ -21,6 +23,7 @@ namespace srouter
     static auto logcat = log::Cat("config");
 
     using namespace config;
+    using namespace quic::literals;
 
     static auto public_ip_loader(std::optional<quic::Address>& into, std::string conf_name)
     {
@@ -50,6 +53,34 @@ namespace srouter
             if (!into)
                 into.emplace();
             into->set_port(port);
+        };
+    }
+    // Loads a size in bytes such as 8MiB, 512KiB or a plain byte count (K and M are taken as KiB and
+    // MiB).  An empty value resets `into` to nullopt.
+    static auto byte_size_loader(std::optional<size_t>& into, std::string conf_name)
+    {
+        return [&into, conf_name = std::move(conf_name)](std::string_view arg) {
+            if (arg.empty())
+            {
+                into.reset();
+                return;
+            }
+            size_t size;
+            auto [end, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), size);
+            auto unit = lowercase_ascii_string(std::string{end, arg.data() + arg.size()});
+            size_t multiplier = 0;
+            if (unit.empty() || unit == "b")
+                multiplier = 1;
+            else if (unit == "k" || unit == "kib")
+                multiplier = 1_ki;
+            else if (unit == "m" || unit == "mib")
+                multiplier = 1_Mi;
+            if (ec != std::errc{} || multiplier == 0)
+                throw std::invalid_argument{
+                    "Invalid {} '{}': expected a size such as 8MiB, 512KiB or 1048576"_format(conf_name, arg)};
+            if (size > std::numeric_limits<size_t>::max() / multiplier)
+                throw std::invalid_argument{"Invalid {} '{}': size is too large"_format(conf_name, arg)};
+            into = size * multiplier;
         };
     }
 
@@ -1110,6 +1141,88 @@ namespace srouter
                 else
                     max_udp_payload = static_cast<size_t>(arg);
             });
+
+        conf.define_option<bool>(
+            "bind",
+            "gro",
+            Default{true},
+            HiddenIf{not platform::is_linux},
+            Comment{
+                "Use UDP GRO (Generic Receive Offload) to receive packets in batches, reducing CPU use and",
+                "packet drops under load.  On kernels without support (before Linux 5.0) this logs a",
+                "warning and receives without it.",
+            },
+            assignment_acceptor(gro));
+
+        conf.define_option<bool>(
+            "bind",
+            "gso",
+            Default{true},
+            HiddenIf{not platform::is_linux},
+            Comment{
+                "Use UDP GSO (Generic Segmentation Offload) to send packets in batches, reducing CPU use.",
+                "Turned off automatically if the network device doesn't support it.",
+            },
+            assignment_acceptor(gso));
+
+        const bool relay = conf.type == config::Type::Relay;
+
+        conf.define_option<std::string>(
+            "bind",
+            "congestion-control",
+            Default{relay ? "cubic" : "bbr"},
+            Comment{
+                "Congestion control algorithm for what Session Router sends over its connections: bbr,",
+                "cubic, or reno.  Cubic and reno slow down on any loss, easing off peers that are dropping",
+                "packets because they can't keep up; bbr keeps its sending rate until loss exceeds 2%.",
+                "",
+                "Relays default to cubic.  Clients default to bbr, which copes better with wifi packet",
+                "loss and avoids filling a slow upload link's buffer, delaying the client's other traffic.",
+            },
+            [this](std::string arg) {
+                arg = lowercase_ascii_string(std::move(arg));
+                if (arg == "bbr")
+                    congestion_control = quic::opt::congestion_control::bbr;
+                else if (arg == "cubic")
+                    congestion_control = quic::opt::congestion_control::cubic;
+                else if (arg == "reno")
+                    congestion_control = quic::opt::congestion_control::reno;
+                else
+                    throw std::invalid_argument{
+                        "Invalid [bind]:congestion-control '{}': expected bbr, cubic, or reno"_format(arg)};
+            });
+
+        // Every relay and client connected to a relay sends to it over the one socket, in bursts, so
+        // relays want a larger receive buffer than libquic's client-oriented default.
+        conf.define_option<std::string>(
+            "bind",
+            "udp-recv-buffer",
+            Default{relay ? "8MiB" : ""},
+            Comment{
+                "UDP receive buffer size to request for the socket, such as 8MiB or 512KiB.  Packets that",
+                "arrive while the buffer is full are dropped.  0 leaves the OS default, and an empty value",
+                "uses libquic's default of {}MiB, which is only used if larger than the OS default."_format(
+                    quic::DEFAULT_SOCKET_RECV_BUFFER / 1_Mi),
+                "",
+                "Relays default to 8MiB; clients to libquic's default.  Linux only allows sizes up to the",
+                "net.core.rmem_max sysctl (which the liboxen-quic-common package raises), and a warning is",
+                "logged if the OS gives less than requested.",
+            },
+            byte_size_loader(socket_buffers.recv, "[bind]:udp-recv-buffer"));
+
+        conf.define_option<std::string>(
+            "bind",
+            "udp-send-buffer",
+            Default{relay ? "1MiB" : ""},
+            Comment{
+                "UDP send buffer size to request for the socket, such as 1MiB or 512KiB.  0 or an empty",
+                "value leaves the OS default.",
+                "",
+                "Relays default to 1MiB; clients to the OS default.  Linux only allows sizes up to the",
+                "net.core.wmem_max sysctl (which the liboxen-quic-common package raises), and a warning is",
+                "logged if the OS gives less than requested.",
+            },
+            byte_size_loader(socket_buffers.send, "[bind]:udp-send-buffer"));
     }
 
     void ApiConfig::define_config_options(ConfigDefinition& conf)

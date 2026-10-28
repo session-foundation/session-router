@@ -12,16 +12,18 @@ namespace srouter
 {
     static_assert(std::same_as<evutil_socket_t, TCPConnection::fd_t>);
 
+    using namespace oxen::quic::literals;
+
     static auto logcat = oxen::log::Cat("tcp");
 
     // Backpressure thresholds.  The stream pair stops us reading from the application when the
     // tunnel is not keeping up; the socket pair pauses the stream when the application is not
     // keeping up.  Both need enough hysteresis to avoid flapping on a high-latency path, where a
     // full bandwidth-delay product of data can legitimately be in flight.
-    inline constexpr size_t STREAM_ALARM_WATER = size_t{512} * 1024;
-    inline constexpr size_t STREAM_CLEAR_WATER = size_t{64} * 1024;
-    inline constexpr size_t SOCKET_ALARM_WATER = size_t{512} * 1024;
-    inline constexpr size_t SOCKET_CLEAR_WATER = size_t{64} * 1024;
+    inline constexpr size_t STREAM_ALARM_WATER = 512_ki;
+    inline constexpr size_t STREAM_CLEAR_WATER = 64_ki;
+    inline constexpr size_t SOCKET_ALARM_WATER = 512_ki;
+    inline constexpr size_t SOCKET_CLEAR_WATER = 64_ki;
 
     constexpr auto evconnlistener_deleter = [](::evconnlistener *e) {
         log::trace(logcat, "Invoking evconnlistener deleter!");

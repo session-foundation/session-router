@@ -112,6 +112,25 @@ namespace srouter
             explicit Comment(std::initializer_list<std::string> comments) : comments{std::move(comments)} {}
         };
 
+        /// Value to pass for an OptionDefinition to make it Hidden only when the given condition is
+        /// true, e.g. `HiddenIf{not platform::is_linux}` for an option that does nothing on other
+        /// platforms but that should still be accepted there, so that a config file written for
+        /// Linux still loads.
+        struct HiddenIf
+        {
+            bool hidden;
+            constexpr explicit HiddenIf(bool hidden) : hidden{hidden} {}
+        };
+
+        template <typename T>
+        constexpr bool hidden_by(const T& opt)
+        {
+            if constexpr (std::is_same_v<T, HiddenIf>)
+                return opt.hidden;
+            else
+                return false;
+        }
+
         /// A convenience function that returns an acceptor which assigns to a reference.
         ///
         /// Note that this holds on to the reference; it must only be used when this is safe to do.
@@ -178,7 +197,8 @@ namespace srouter
 
         template <typename Option, typename T>
         concept is_option = std::is_base_of_v<flag::opt, std::remove_cvref_t<Option>> or std::is_same_v<Comment, Option>
-            or is_default<Option> or is_default_array<Option> or std::is_invocable_v<std::remove_cvref_t<Option>, T>;
+            or std::is_same_v<HiddenIf, std::remove_cvref_t<Option>> or is_default<Option> or is_default_array<Option>
+            or std::is_invocable_v<std::remove_cvref_t<Option>, T>;
     }  // namespace config
 
     /// A base class for specifying config options and their constraints. The basic to/from string
@@ -188,13 +208,14 @@ namespace srouter
     struct OptionDefinitionBase
     {
         template <typename... T>
-        OptionDefinitionBase(std::string section_, std::string name_, const T&...)
+        OptionDefinitionBase(std::string section_, std::string name_, const T&... opts)
             : section(std::move(section_)),
               name(std::move(name_)),
               required{(std::derived_from<T, config::flag::REQUIRED> || ...)},
               multi_valued{(std::derived_from<T, config::flag::MULTIVALUE> || ...)},
               obsolete{(std::derived_from<T, config::flag::OBSOLETE> || ...)},
-              hidden{obsolete || (std::derived_from<T, config::flag::HIDDEN> || ...)},
+              hidden{
+                  obsolete || (std::derived_from<T, config::flag::HIDDEN> || ...) || (config::hidden_by(opts) || ...)},
               relay_only{(std::derived_from<T, config::flag::RELAYONLY> || ...)},
               client_only{(std::derived_from<T, config::flag::CLIENTONLY> || ...)},
               no_embedded{(std::derived_from<T, config::flag::NOTEMBEDDED> || ...)}
@@ -275,7 +296,10 @@ namespace srouter
         {
             constexpr bool has_default = ((config::is_default_array<Options> || config::is_default<Options>) || ...);
             constexpr bool has_required = (std::is_same_v<std::remove_cvref_t<Options>, config::flag::REQUIRED> || ...);
-            constexpr bool has_hidden = (std::is_same_v<std::remove_cvref_t<Options>, config::flag::HIDDEN> || ...);
+            constexpr bool has_hidden =
+                ((std::is_same_v<std::remove_cvref_t<Options>, config::flag::HIDDEN>
+                  || std::is_same_v<std::remove_cvref_t<Options>, config::HiddenIf>)
+                 || ...);
             static_assert(not(has_default and has_required), "Default{...} and Required are mutually exclusive");
             static_assert(not(has_hidden and has_required), "Hidden and Required are mutually exclusive");
 
