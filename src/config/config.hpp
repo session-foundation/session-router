@@ -15,6 +15,8 @@
 #include "util/logging.hpp"
 #include "util/str.hpp"
 
+#include <oxen/quic/opt.hpp>
+
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -242,6 +244,11 @@ namespace srouter
         std::optional<quic::Address> listen_addr;
         // nullopt means no cap.
         std::optional<size_t> max_udp_payload;
+        // nullopt in either direction uses libquic's default.
+        quic::opt::socket_buffers socket_buffers;
+        bool gro = true;
+        bool gso = true;
+        quic::opt::congestion_control congestion_control = quic::opt::congestion_control::cubic;
 
         void define_config_options(ConfigDefinition& conf) override;
     };
