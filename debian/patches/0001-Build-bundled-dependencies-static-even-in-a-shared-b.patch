@@ -10,7 +10,7 @@ installed and conflicts with the system package.
  1 file changed, 4 insertions(+)
 
 diff --git a/external/CMakeLists.txt b/external/CMakeLists.txt
-index b816832..c844c1d 100644
+index fbfd8c9..a468483 100644
 --- a/external/CMakeLists.txt
 +++ b/external/CMakeLists.txt
 @@ -1,3 +1,7 @@
