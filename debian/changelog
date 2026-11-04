@@ -1,3 +1,18 @@
+session-router (1.1.1-1~ubuntu2404) noble; urgency=medium
+
+  * Update libquic to 1.13.0
+  * Add a HiddenIf config option flag
+  * Add [bind] options for UDP GRO/GSO, congestion control and socket buffers
+  * Use libquic's size literals for the TCP backpressure thresholds
+  * Default clients to bbr congestion control
+  * Use bbr congestion control for tunnelled QUIC connections
+  * Use cubic congestion control in generated hidden service configs
+  * Bump version to 1.1.1
+  * Bump required libquic; remove old packaging cruft
+  * Bump libquic to latest stable (1.14.0)
+
+ -- Jason Rhinelander <jason@session.foundation>  Wed, 04 Nov 2026 18:28:00 -0400
+
 session-router (1.1.1~rc1-1~ubuntu2404) noble; urgency=medium
 
   [ Morgan Pretty ]
