@@ -83,9 +83,18 @@ namespace srouter::link
         if (router.is_service_node)
             inbound_alpn.emplace({RELAY_ALPN, CLIENT_ALPN, BOOTSTRAP_ALPN});
 
+        const auto& links = router.config().links;
+
         std::optional<quic::opt::max_udp_payload> max_udp_payload;
-        if (auto cap = router.config().links.max_udp_payload)
-            max_udp_payload.emplace(*cap);
+        if (links.max_udp_payload)
+            max_udp_payload.emplace(*links.max_udp_payload);
+
+        std::optional<quic::opt::allow_gro> gro;
+        if (links.gro)
+            gro.emplace();
+        std::optional<quic::opt::allow_gso> gso;
+        if (links.gso)
+            gso.emplace();
 
         endpoint = quic::Endpoint::endpoint(
             *loop,
@@ -102,7 +111,10 @@ namespace srouter::link
             inbound_alpn,
             quic::opt::outbound_alpns{{router.is_service_node ? RELAY_ALPN : CLIENT_ALPN}},
             quic::opt::enable_datagrams{quic::Splitting::ACTIVE}.queue_limit(2'000'000),
-            max_udp_payload);
+            max_udp_payload,
+            links.socket_buffers,
+            gro,
+            gso);
 
         tls_creds->enable_outbound_0rtt(
             [this](
@@ -187,7 +199,8 @@ namespace srouter::link
 
             endpoint->listen(
                 tls_creds,
-                quic::opt::idle_timeout{router.is_service_node ? RELAY_INBOUND_IDLE_TIMEOUT : CLIENT_IDLE_TIMEOUT});
+                quic::opt::idle_timeout{router.is_service_node ? RELAY_INBOUND_IDLE_TIMEOUT : CLIENT_IDLE_TIMEOUT},
+                links.congestion_control);
         }
     }
 
@@ -503,7 +516,8 @@ namespace srouter::link
                 quic::RemoteAddress{rid.to_view(), rc.addr()},
                 tls_creds,
                 quic::opt::keep_alive{router.is_service_node ? RELAY_OUTBOUND_KEEP_ALIVE : CLIENT_KEEP_ALIVE},
-                quic::opt::idle_timeout{router.is_service_node ? RELAY_OUTBOUND_IDLE_TIMEOUT : CLIENT_IDLE_TIMEOUT});
+                quic::opt::idle_timeout{router.is_service_node ? RELAY_OUTBOUND_IDLE_TIMEOUT : CLIENT_IDLE_TIMEOUT},
+                router.config().links.congestion_control);
 
             auto control_stream = make_control(*conn, rid, router.is_service_node ? RELAY_ALPN : CLIENT_ALPN);
 
@@ -989,7 +1003,10 @@ namespace srouter::link
     // Establish a no-creds, no-0rtt, bootstrap or relay-testing (client ALPN) connection.
     static auto testcat = log::Cat("testing");
     std::pair<std::shared_ptr<quic::Connection>, std::shared_ptr<quic::BTRequestStream>> special_connect_impl(
-        quic::Endpoint& endpoint, const RelayContact& rc, std::string_view alpn)
+        quic::Endpoint& endpoint,
+        const RelayContact& rc,
+        std::string_view alpn,
+        quic::opt::congestion_control congestion_control)
     {
         std::pair<std::shared_ptr<quic::Connection>, std::shared_ptr<quic::BTRequestStream>> ret;
         auto& [conn, control] = ret;
@@ -1007,6 +1024,7 @@ namespace srouter::link
             quic::RemoteAddress{rc.router_id().to_view(), rc.addr()},
             quic::opt::idle_timeout{BOOTSTRAP_IDLE_TIMEOUT},
             quic::opt::outbound_alpn(alpn),
+            congestion_control,
             [bs](quic::Connection& conn) {
                 log::debug(
                     bs ? logcat : testcat,
@@ -1043,13 +1061,13 @@ namespace srouter::link
     std::pair<std::shared_ptr<quic::Connection>, std::shared_ptr<quic::BTRequestStream>> Endpoint::bootstrap_connect(
         const RelayContact& rc)
     {
-        return special_connect_impl(*endpoint, rc, BOOTSTRAP_ALPN);
+        return special_connect_impl(*endpoint, rc, BOOTSTRAP_ALPN, router.config().links.congestion_control);
     }
 
     std::pair<std::shared_ptr<quic::Connection>, std::shared_ptr<quic::BTRequestStream>>
     Endpoint::testing_client_connect(const RelayContact& rc)
     {
-        return special_connect_impl(*endpoint, rc, CLIENT_ALPN);
+        return special_connect_impl(*endpoint, rc, CLIENT_ALPN, router.config().links.congestion_control);
     }
 
 }  // namespace srouter::link
