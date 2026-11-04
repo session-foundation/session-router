@@ -43,6 +43,12 @@ namespace srouter::session
     inline constexpr auto INNER_IDLE_TIMEOUT = 60s;
     inline constexpr auto INNER_IDLE_TEARDOWN = 60s;
 
+    // The queue the inner connection builds is mostly a link connection's datagram send queue at the
+    // slowest hop, which can hold up to 2MB and is shared with every other session crossing that
+    // hop.  Cubic and reno only slow down once that queue overflows, delaying everyone else's
+    // traffic in the meantime; bbr aims to send at the measured bottleneck rate with little queue.
+    inline constexpr auto INNER_CONGESTION_CONTROL = quic::opt::congestion_control::bbr;
+
     // The destination port sent as the first bytes of each stream.
     inline constexpr size_t PORT_PREAMBLE_SIZE = 2;
 
@@ -107,6 +113,7 @@ namespace srouter::session
                 _tls_creds,
                 quic::opt::max_streams{INNER_MAX_STREAMS},
                 quic::opt::idle_timeout{INNER_IDLE_TIMEOUT},
+                INNER_CONGESTION_CONTROL,
                 [this](quic::Stream& s) { return on_stream_opened(s); });
     }
 
@@ -135,7 +142,8 @@ namespace srouter::session
             _tls_creds,
             quic::opt::max_streams{INNER_MAX_STREAMS},
             quic::opt::idle_timeout{INNER_IDLE_TIMEOUT},
-            quic::opt::keep_alive{INNER_KEEP_ALIVE});
+            quic::opt::keep_alive{INNER_KEEP_ALIVE},
+            INNER_CONGESTION_CONTROL);
     }
 
     TCPConnection* TCPTunnel::connect_stream(bufferevent* bev, TCPConnection::fd_t fd, uint16_t dest_port)
