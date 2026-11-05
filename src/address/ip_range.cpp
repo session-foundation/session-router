@@ -190,9 +190,13 @@ namespace srouter
 
     std::optional<ipv6_net> find_private_ipv6_net(const std::vector<ipv6_range>& exclude, uint8_t mask)
     {
-        // This /48 is registered for Session Router in the IPv6 ULA registry (https://ula.ungleich.ch/):
-        constexpr uint64_t start = 0xfd2e'7365'7368'0000;  // 2e 73 65 73 68 == . s e s h
-        constexpr uint64_t end = start + 0x1'0000;
+        // fd2e:7365:7368::/48 is registered for Session Router in the IPv6 ULA registry
+        // (https://ula.ungleich.ch/); 2e 73 65 73 68 == ". s e s h".  The fourth group of an address
+        // in it is the subnet ID.
+        constexpr auto sesh_subnet_ip = [](uint16_t subnet) {
+            return ipv6{0xfd2e, 0x7365, 0x7368, subnet, 0, 0, 0, 1};
+        };
+        static constexpr auto sesh_ula = sesh_subnet_ip(0) / 48;
 
         if (mask < 48)
         {
@@ -200,54 +204,32 @@ namespace srouter
             return std::nullopt;
         }
 
-        // First do a preliminary check that none of the excluded ranges covers the entire /48,
-        // because if so, we simply can't succeed.
+        if (std::ranges::any_of(exclude, [](const auto& e) { return e.mask <= 48 && e.contains(sesh_ula.ip); }))
         {
-            ipv6 min, max;
-            min.hi = start;
-            max.hi = end - 1;
-            max.lo = 0xffff'ffff'ffff'ffff;
-            if (std::ranges::any_of(
-                    exclude, [&min, &max](const auto& e) { return e.contains(min) && e.contains(max); }))
-            {
-                log::warning(
-                    logcat, "Failed to find a free private /64 IPv6 range: the entire {}/48 range is unavailable", min);
-                return std::nullopt;
-            }
+            log::warning(
+                logcat, "Failed to find a free private IPv6 range: the entire {} range is unavailable", sesh_ula);
+            return std::nullopt;
         }
 
-        // Cut off the smallest block we search to /64 just so that this doesn't take an excessive
-        // amount of time, and because we can do it with just uint64_t math.  We still give back
-        // whatever you requested, if smaller, we just don't search the smaller spaces.
-        auto search_mask = std::min<uint8_t>(64, mask);
-        uint64_t hi_step = 1 << (64 - search_mask);
+        // We step through the /48's 16-bit subnet IDs no more finely than /64, so that the search
+        // stays short; a request for something smaller than a /64 still gets what it asked for, just
+        // taken from the start of a free /64.
+        const uint8_t search_mask = std::min<uint8_t>(64, mask);
+        const uint32_t subnet_step = uint32_t{1} << (64 - search_mask);
 
-        auto ret = std::make_optional<ipv6_net>();
-        auto& net = *ret;
-        net.ip.lo = 1;
-        auto& hi = net.ip.hi;
-        for (hi = start; hi < end; hi += hi_step)
+        for (uint32_t subnet = 0; subnet <= 0xffff; subnet += subnet_step)
         {
-            bool found_overlap = false;
-            for (const auto& e : exclude)
-            {
-                if (e.contains(net.ip) || net.contains(e.ip))
-                {
-                    log::debug(logcat, "Not selecting {}: overlaps with existing range {}", net.ip, e);
-                    found_overlap = true;
-                    break;
-                }
-            }
+            const ipv6_net candidate{sesh_subnet_ip(static_cast<uint16_t>(subnet)), search_mask};
 
-            if (found_overlap)
-                continue;
+            auto overlap = std::ranges::find_if(
+                exclude, [&candidate](const auto& e) { return e.contains(candidate.ip) || candidate.contains(e.ip); });
+            if (overlap == exclude.end())
+                return ipv6_net{candidate.ip, mask};
 
-            net.mask = mask;  // In case we enlarged it for searching
-            return ret;
+            log::debug(logcat, "Not selecting {}: overlaps with existing range {}", candidate, *overlap);
         }
 
-        ret.reset();
-        return ret;
+        return std::nullopt;
     }
 
 }  //  namespace srouter
