@@ -1,3 +1,9 @@
+session-router (1.1.1-2~deb13) trixie; urgency=medium
+
+  * Construct IPv6 auto-range candidates with their search mask
+
+ -- Jason Rhinelander <jason@session.foundation>  Thu, 05 Nov 2026 13:40:31 -0400
+
 session-router (1.1.1-1~deb13) trixie; urgency=medium
 
   * Update libquic to 1.13.0
