@@ -1,3 +1,9 @@
+session-router (1.1.1-2~deb12) bookworm; urgency=medium
+
+  * Construct IPv6 auto-range candidates with their search mask
+
+ -- Jason Rhinelander <jason@session.foundation>  Thu, 05 Nov 2026 13:40:34 -0400
+
 session-router (1.1.1-1~deb12) bookworm; urgency=medium
 
   * Update libquic to 1.13.0
