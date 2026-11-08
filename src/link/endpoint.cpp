@@ -1039,7 +1039,7 @@ namespace srouter::link
                         bs ? logcat : testcat,
                         bs ? log::Level::warn : log::Level::debug,
                         "{} while connecting to {} {} @ {}",
-                        ec == static_cast<uint64_t>(NGTCP2_ERR_HANDSHAKE_TIMEOUT)
+                        ec == quic::CONN_HANDSHAKE_TIMEOUT
                             ? "Connection timeout"
                             : "An error occurred (ec={})"_format(ec),
                         bs ? "bootstrap" : "testee",
