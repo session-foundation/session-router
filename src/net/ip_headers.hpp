@@ -1,6 +1,9 @@
 #pragma once
 
-#ifdef _WIN32
+#if defined(__MINGW32__)
+#include <in6addr.h>
+#elif defined(_WIN32)
+// MSVC's in6addr.h is not self-contained.
 #include <ws2tcpip.h>
 #else
 #include <netinet/ip6.h>
