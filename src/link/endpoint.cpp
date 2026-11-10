@@ -1039,9 +1039,8 @@ namespace srouter::link
                         bs ? logcat : testcat,
                         bs ? log::Level::warn : log::Level::debug,
                         "{} while connecting to {} {} @ {}",
-                        ec == quic::CONN_HANDSHAKE_TIMEOUT
-                            ? "Connection timeout"
-                            : "An error occurred (ec={})"_format(ec),
+                        ec == quic::CONN_HANDSHAKE_TIMEOUT ? "Connection timeout"
+                                                           : "An error occurred (ec={})"_format(ec),
                         bs ? "bootstrap" : "testee",
                         RouterID{conn.remote_key().first<32>()}.to_network_address(true),
                         conn.remote());
