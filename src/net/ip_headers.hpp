@@ -1,13 +1,20 @@
 #pragma once
 
+#if defined(__MINGW32__)
+#include <in6addr.h>
+#elif defined(_WIN32)
+// MSVC's in6addr.h is not self-contained.
+#include <ws2tcpip.h>
+#else
 #include <netinet/ip6.h>
+#endif
 #include <oxenc/endian.h>
 
 namespace srouter
 {
     struct ip_header
     {
-#if __BYTE_ORDER == __LITTLE_ENDIAN
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
         uint8_t header_len : 4;
         uint8_t version : 4;
 #else
@@ -29,7 +36,7 @@ namespace srouter
 
     struct ipv6_header
     {
-#if __BYTE_ORDER == __LITTLE_ENDIAN
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
         uint8_t tclass_hi : 4;
         uint8_t version : 4;
         uint8_t flow_hi : 4;
@@ -86,7 +93,7 @@ namespace srouter
         uint16_t dest;   // dst addr or port
         uint32_t seqno;  // sequence number
         uint32_t ack;    // ack number
-#if __BYTE_ORDER == __LITTLE_ENDIAN
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
         uint8_t : 4;           // unused/reserved
         uint8_t data_off : 4;  // data offset
 #else

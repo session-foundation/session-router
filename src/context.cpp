@@ -95,7 +95,12 @@ namespace srouter
 
     void Context::signal(int sig)
     {
-        if (router && (sig == SIGINT || sig == SIGTERM || sig == SIGKILL))
+        if (router
+            && (sig == SIGINT || sig == SIGTERM
+#ifdef SIGKILL
+                || sig == SIGKILL
+#endif
+                ))
         {
             log::warning(
                 logcat,

@@ -269,6 +269,25 @@ def main(ctx):
             lto = True,
         ),
 
+        # The embedded core only, as libsession builds it for Windows.
+        linux(
+            "Static Windows x64: core",
+            "debian-win32-cross",
+            deps = static_deps + ["g++-mingw-w64-x86-64-posix"],
+            session_repo = False,
+            cmake = {
+                "CMAKE_TOOLCHAIN_FILE": "../contrib/cross/mingw64.cmake",
+                "TOOLCHAIN_SUFFIX": "-posix",
+                "BUILD_STATIC_DEPS": True,
+                "SROUTER_FULL": False,
+                "SROUTER_DAEMON": False,
+                "SROUTER_NATIVE_BUILD": False,
+                "SROUTER_JEMALLOC": False,
+                "SROUTER_WARNINGS_AS_ERRORS": True,
+                "WITH_SYSTEMD": False,
+            },
+        ),
+
         linux("Ubuntu latest", "ubuntu-rolling"),
         linux("Ubuntu 24.04", "ubuntu-noble"),
         linux("Ubuntu 22.04", "ubuntu-jammy"),
