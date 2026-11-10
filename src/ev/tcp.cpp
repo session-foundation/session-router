@@ -44,6 +44,11 @@ namespace srouter
         return rv;
     }
 
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+// GCC false positive on destroying the moved-from vector at -O3.
+#pragma GCC diagnostic ignored "-Wfree-nonheap-object"
+#endif
     static void tcp_read_cb(bufferevent *bev, void *user_arg)
     {
         auto *conn = reinterpret_cast<TCPConnection *>(user_arg);
@@ -60,6 +65,9 @@ namespace srouter
 
         conn->stream->send(std::move(buf));
     };
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
     static void tcp_write_cb([[maybe_unused]] bufferevent *bev, void *user_arg)
     {
@@ -236,7 +244,11 @@ namespace srouter
 
         _write_shutdown = true;
         if (fd != -1)
+#ifdef _WIN32
+            ::shutdown(static_cast<SOCKET>(fd), SD_SEND);
+#else
             ::shutdown(fd, SHUT_WR);
+#endif
 
         if (_fin_sent)
             finish();

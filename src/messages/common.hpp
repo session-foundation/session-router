@@ -7,6 +7,11 @@ namespace srouter::messages
 {
     using namespace std::literals;
 
+#ifdef STATUS_TIMEOUT
+// winnt.h defines STATUS_TIMEOUT as an NTSTATUS value, which would clobber ours.
+#undef STATUS_TIMEOUT
+#endif
+
     inline constexpr auto STATUS_KEY = "!"sv;
     std::string serialize_status_response(std::string_view value);
 
