@@ -159,6 +159,10 @@ namespace session::router
         /// session this is the same as the path's final hop; for a client<->client session it is
         /// the far client, reached via that final hop as a pivot.
         std::string remote;
+
+        /// The session's other established paths to the same remote, held ready to switch to if
+        /// `path` fails or nears expiry.  Pinged like `path`, but carrying no traffic.
+        std::vector<path_info> standby;
     };
 
     class SessionRouter

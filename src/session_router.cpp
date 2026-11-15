@@ -252,7 +252,11 @@ namespace session::router
             std::vector<session_path> ret;
             r->session_endpoint().for_each_session(
                 [&ret](const srouter::NetworkAddress& addr, const srouter::session::Session& s) {
-                    ret.push_back({to_path_info(s.current_path_info()), addr.to_string()});
+                    auto& out = ret.emplace_back();
+                    out.path = to_path_info(s.current_path_info());
+                    out.remote = addr.to_string();
+                    for (const auto& info : s.standby_path_info())
+                        out.standby.push_back(to_path_info(info));
                 });
             return ret;
         });
