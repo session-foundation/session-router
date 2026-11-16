@@ -437,8 +437,11 @@ namespace srouter::vpn
             nl_request.r.rtm_scope = RT_SCOPE_UNIVERSE;
             if (af == AF_INET)
             {
-                // Metric 0, and added without NLM_F_EXCL so that it is prepended ahead of an
-                // existing metric 0 default route rather than rejected.
+                // Metric 0, like a default route added without one.  Routes with the same prefix
+                // and metric are tried in list order, and an add without NLM_F_EXCL or
+                // NLM_F_APPEND goes to the front (`ip route prepend`), so the blackhole wins over
+                // an existing metric 0 default instead of being rejected.  EEXIST only comes back
+                // if the same blackhole is already there.
                 ipv4 addr{};
                 nl_request.AddData(RTA_DST, &addr.addr, sizeof(addr.addr));
             }
@@ -593,8 +596,7 @@ namespace srouter::vpn
         // Default (::/0) IPv6 routes with a gateway, from /proc/net/ipv6_route.  Each line is:
         //   dest dest_plen src src_plen next_hop metric refcnt use flags devname
         // with addresses as 32 hex digits in network order and the rest as hex integers.
-        void ipv6_default_gateways(
-            std::string_view ifname, std::vector<std::tuple<uint32_t, ipv6, int>>& out, std::vector<std::string>& devs)
+        void ipv6_default_gateways(std::string_view ifname, std::vector<std::tuple<uint32_t, ipv6, int>>& out)
         {
             std::ifstream inf{"/proc/net/ipv6_route"};
             for (std::string line; std::getline(inf, line);)
@@ -615,7 +617,6 @@ namespace srouter::vpn
                 if (not(fl & RTF_GATEWAY) or (fl & RTF_REJECT) or gw == ipv6{})
                     continue;
                 out.emplace_back(m, gw, static_cast<int>(if_nametoindex(dev.c_str())));
-                devs.push_back(dev);
             }
         }
 
@@ -702,8 +703,7 @@ namespace srouter::vpn
                 gw4.emplace_back(metric, ipv4{gw}, static_cast<int>(if_nametoindex(std::string{parts[0]}.c_str())));
             }
 
-            std::vector<std::string> devs6;
-            ipv6_default_gateways(ifname, gw6, devs6);
+            ipv6_default_gateways(ifname, gw6);
 
             std::ranges::stable_sort(gw4, {}, [](const auto& t) { return std::get<0>(t); });
             std::ranges::stable_sort(gw6, {}, [](const auto& t) { return std::get<0>(t); });
