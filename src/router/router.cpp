@@ -864,7 +864,8 @@ namespace srouter
                 try_calling(logcat, callback);
 
             if (persistent || !fire_now)
-                (with_paths ? _on_path_disconnected : _on_path_connected).emplace_back(std::move(callback), persistent);
+                (with_paths ? _on_path_disconnected : _on_edge_disconnected)
+                    .emplace_back(std::move(callback), persistent);
         });
     }
 
