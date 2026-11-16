@@ -547,6 +547,10 @@ namespace srouter::link
         if (!pending)
         {
             log::debug(logcat, "Initiating new connection to send to {}", rid.short_string());
+            // If default is via TUN, ensure a host route to this relay exists first.
+            router.poke_first_hop(rc.addr());
+            if (rc.addr6())
+                router.poke_first_hop(*rc.addr6());
             auto conn = endpoint->connect(
                 quic::RemoteAddress{rid.to_view(), rc.addr()},
                 tls_creds,
@@ -1096,6 +1100,9 @@ namespace srouter::link
     std::pair<std::shared_ptr<quic::Connection>, std::shared_ptr<quic::BTRequestStream>> Endpoint::bootstrap_connect(
         const RelayContact& rc)
     {
+        router.poke_first_hop(rc.addr());
+        if (rc.addr6())
+            router.poke_first_hop(*rc.addr6());
         return special_connect_impl(*endpoint, rc, BOOTSTRAP_ALPN, router.config().links.congestion_control);
     }
 

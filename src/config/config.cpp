@@ -13,8 +13,10 @@
 #include "util/formattable.hpp"
 #include "util/logging/buffer.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <filesystem>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 
@@ -258,7 +260,7 @@ namespace srouter
                 "Specify a `.{}` address and a reserved ip range to use as an exit broker."_format(CLIENT_TLD),
                 "Examples:",
                 "    reserved-range=whatever.{}"_format(CLIENT_TLD),
-                "would route all exit traffic through whatever.{}; and"_format(CLIENT_TLD),
+                "would route all exit traffic (IPv4 and IPv6) through whatever.{}; and"_format(CLIENT_TLD),
                 "    reserved-range=stuff.{}:100.0.0.0/24"_format(CLIENT_TLD),
                 "would route the IP range 100.0.0.0/24 through stuff.{}."_format(CLIENT_TLD),
                 "This option can be specified multiple times (to map different IP ranges).",
@@ -267,21 +269,26 @@ namespace srouter
                 if (arg.empty())
                     return;
 
-                std::variant<ipv4_range, ipv6_range> range;
+                std::vector<std::variant<ipv4_range, ipv6_range>> range;
 
                 const auto pos = arg.find(":");
 
                 if (pos == std::string::npos)
-                    range = ipv4{0} / 0;
+                    range = {ipv4{0} / 0, ipv6{} / 0};
                 else
                 {
                     try
                     {
                         std::string input = arg.substr(pos + 1);
                         if (input.find(":") != std::string::npos)  // ipv6
-                            range = parse_ipv6_range(input, 128);
+                            range.emplace_back(parse_ipv6_range(input, 128));
                         else
-                            range = parse_ipv4_range(input, 32);
+                            range.emplace_back(parse_ipv4_range(input, 32));
+
+                        // A /0 is a full tunnel, for both families, same as MapExit's full_tunnel:
+                        // the default route via the TUN is installed for IPv4 and IPv6 together.
+                        if (std::visit([](const auto& r) { return r.mask == 0; }, range.front()))
+                            range = {ipv4{0} / 0, ipv6{} / 0};
                     }
                     catch (const std::exception& e)
                     {
@@ -292,12 +299,12 @@ namespace srouter
                 }
 
                 if (is_valid_sns(arg))
-                    sns_ranges[arg].push_back(std::move(range));
+                    std::ranges::move(range, std::back_inserter(sns_ranges[arg]));
                 else
                 {
                     try
                     {
-                        ranges[NetworkAddress{arg}].push_back(std::move(range));
+                        std::ranges::move(range, std::back_inserter(ranges[NetworkAddress{arg}]));
                     }
                     catch (const std::exception& e)
                     {
@@ -541,7 +548,10 @@ namespace srouter
                 "Enable / disable route configuration blackholes.",
                 "When enabled Session Router will drop IPv4 and IPv6 traffic (when in exit mode) that is "
                 "not",
-                "handled in the exit configuration.  Enabled by default."},
+                "handled in the exit configuration, and keeps the exit routes in place while it has no",
+                "edge connections, so traffic is dropped rather than sent outside the exit until it",
+                "reconnects.  When disabled the exit routes are removed until it reconnects.  Enabled by",
+                "default."},
             assignment_acceptor(blackhole_routes));
 
         conf.define_option<std::string>(

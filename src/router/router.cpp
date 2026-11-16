@@ -892,6 +892,28 @@ namespace srouter
         }
     }
 
+    void Router::set_first_hop_poker(std::function<void(const ipv4&)> v4, std::function<void(const ipv6&)> v6)
+    {
+        _first_hop_poke_v4 = std::move(v4);
+        _first_hop_poke_v6 = std::move(v6);
+    }
+
+    void Router::poke_first_hop(const quic::Address& addr)
+    {
+        if (addr.is_any_addr())
+            return;
+        if (addr.is_ipv4())
+        {
+            if (_first_hop_poke_v4)
+                _first_hop_poke_v4(addr.to_ipv4());
+        }
+        else if (addr.is_ipv6())
+        {
+            if (_first_hop_poke_v6)
+                _first_hop_poke_v6(addr.to_ipv6());
+        }
+    }
+
     void Router::on_edge_conn_change()
     {
         assert(_loop->inside());

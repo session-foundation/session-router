@@ -80,8 +80,16 @@ namespace srouter::rpc
 
         for (const auto& addr : _router.config().api.rpc_bind_addrs)
         {
-            _omq.listen_plain(addr);
-            log::debug(logcat, "Bound RPC server to {}", addr);
+            // The llarp category (MapExit and friends) requires admin.  An IPC socket is guarded by
+            // its file permissions, and OxenMQ doesn't get a usable address for its peers, so every
+            // IPC connection gets admin.  Over TCP only loopback peers do.
+            const bool ipc = addr.starts_with("ipc://");
+            _omq.listen_plain(addr, [ipc](std::string_view remote, std::string_view /*pubkey*/, bool /*sn*/) {
+                if (ipc or remote.starts_with("127.") or remote == "::1")
+                    return oxenmq::AuthLevel::admin;
+                return oxenmq::AuthLevel::denied;
+            });
+            log::debug(logcat, "Bound RPC server to {} (admin for loopback/IPC only)", addr);
         }
 
         AddCategories();
@@ -102,7 +110,10 @@ namespace srouter::rpc
 
     void RPCServer::AddCategories()
     {
-        _omq.add_category("llarp", oxenmq::AuthLevel::none).add_request_command("logs", [this](oxenmq::Message& msg) {
+        // AuthLevel::admin: MapExit/UnmapExit/SwapExits (and other llarp commands) are not
+        // freely usable once the API is bound.  Loopback/IPC connections are granted admin
+        // by the listen_plain AllowFunc above.  Do not lower this back to none.
+        _omq.add_category("llarp", oxenmq::AuthLevel::admin).add_request_command("logs", [this](oxenmq::Message& msg) {
             HandleLogsSubRequest(msg);
         });
 
@@ -507,32 +518,148 @@ namespace srouter::rpc
         // });
     }
 
+    namespace
+    {
+        // Privacy profile: MapExit accepts IP CIDRs only. Reject hostname-looking entries
+        // (alpha chars that do not parse as IPv4/IPv6 CIDR — IPv6 hex a-f still OK).
+        bool ip_range_looks_like_hostname(std::string_view rstr)
+        {
+            bool has_alpha = false;
+            for (char c : rstr)
+            {
+                if ((c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z'))
+                {
+                    has_alpha = true;
+                    break;
+                }
+            }
+            if (not has_alpha)
+                return false;
+            try
+            {
+                if (rstr.find(':') != std::string_view::npos)
+                    (void)parse_ipv6_range(rstr, 128);
+                else
+                    (void)parse_ipv4_range(rstr, 32);
+                return false;  // parsed as CIDR (e.g. IPv6 with hex letters)
+            }
+            catch (const std::exception&)
+            {
+                return true;
+            }
+        }
+
+        // Parses MapExit/SwapExits ranges.  full_tunnel=true maps 0.0.0.0/0 and ::/0, and cannot be
+        // combined with specific ranges; without it, ip_ranges must be non-empty and contain no /0.
+        std::vector<std::variant<ipv4_range, ipv6_range>> build_exit_ranges(
+            const std::vector<std::string>& ip_ranges, bool full_tunnel)
+        {
+            std::vector<std::variant<ipv4_range, ipv6_range>> out;
+            for (const auto& rstr : ip_ranges)
+            {
+                if (ip_range_looks_like_hostname(rstr))
+                    throw std::invalid_argument{"ip_ranges must be IP ranges; hostname rejected: {}"_format(rstr)};
+                std::variant<ipv4_range, ipv6_range> parsed;
+                if (rstr.find(':') != std::string::npos)
+                    parsed = parse_ipv6_range(rstr, 128);
+                else
+                    parsed = parse_ipv4_range(rstr, 32);
+                const bool is_all = std::visit([](const auto& r) { return r.mask == 0; }, parsed);
+                if (is_all and not full_tunnel)
+                    throw std::invalid_argument{"{} requires full_tunnel=true"_format(rstr)};
+                if (full_tunnel and not is_all)
+                    throw std::invalid_argument{"full_tunnel=true cannot be combined with {}"_format(rstr)};
+                out.push_back(std::move(parsed));
+            }
+            if (full_tunnel)
+                return {ipv4{0} / 0, ipv6{} / 0};
+            if (out.empty())
+                throw std::invalid_argument{"ip_ranges is empty: list ranges, or pass full_tunnel=true"};
+            return out;
+        }
+
+        NetworkAddress parse_exit_address(const std::string& addr)
+        {
+            if (addr.empty())
+                throw std::invalid_argument{"exit address (.{}) required"_format(CLIENT_TLD)};
+            NetworkAddress exit_addr{addr};
+            if (not exit_addr.client())
+                throw std::invalid_argument{"exit address must be a .{} address"_format(CLIENT_TLD)};
+            return exit_addr;
+        }
+
+        void start_exit_session(Router& router, const NetworkAddress& exit_addr)
+        {
+            try
+            {
+                router.session_endpoint().initiate_remote_session(exit_addr, nullptr);
+            }
+            catch (const std::exception& e)
+            {
+                log::warning(logcat, "Could not start session to exit {}: {}", exit_addr, e.what());
+            }
+        }
+    }  // namespace
+
+    // The exit mappings, session state and OS routes all belong to the router loop, so the
+    // handlers below do their work there and reply once it is done.
+
     void RPCServer::invoke(MapExit& mapexit)
     {
         log_print_rpc(mapexit);
 
-        MapExit exit_request;
-        // steal replier from exit RPC endpoint
-        exit_request.replier.emplace(mapexit.move());
+        try
+        {
+            auto exit_addr = parse_exit_address(mapexit.request.address);
+            auto built = build_exit_ranges(mapexit.request.ip_ranges, mapexit.request.full_tunnel);
+            const auto count = built.size();
 
-        // TODO: connect this to remote service session management (service::Handler)
-        // _router.hidden_service_context().GetDefault()->map_exit(
-        //     mapexit.request.address,
-        //     mapexit.request.token,
-        //     mapexit.request.ip_range,
-        //     [exit = std::move(exit_request)](bool success, std::string result) mutable {
-        //       if (success)
-        //         exit.send_response({{"result"}, std::move(result)});
-        //       else
-        //         exit.send_response({{"error"}, std::move(result)});
-        //     });
+            _router._jq->call_get([&] {
+                _router.session_endpoint().set_auth_token(exit_addr, mapexit.request.token);
+                _router.mutable_exit_ranges()[exit_addr] = std::move(built);
+                start_exit_session(_router, exit_addr);
+                _router.exit_map_changed();
+            });
+
+            log::info(logcat, "Mapped {} range(s) via exit {}", count, exit_addr);
+            SetJSONResponse("mapped {} range(s) via {}"_format(count, exit_addr), mapexit.response);
+        }
+        catch (const std::exception& e)
+        {
+            SetJSONError(e.what(), mapexit.response);
+        }
     }
 
     void RPCServer::invoke(ListExits& listexits)
     {
         log_print_rpc(listexits);
 
-        // TODO: this
+        auto exits = _router._jq->call_get([this] {
+            nlohmann::json exits = nlohmann::json::array();
+            for (const auto& [addr, range_list] : _router.exit_ranges())
+            {
+                nlohmann::json entry;
+                entry["address"] = addr.to_string();
+                nlohmann::json rs = nlohmann::json::array();
+                for (const auto& r : range_list)
+                    rs.push_back(std::visit([](const auto& rr) { return rr.to_string(); }, r));
+                entry["ranges"] = std::move(rs);
+                if (auto* s = _router.session_endpoint().get_session(addr))
+                {
+                    entry["session_live"] = true;
+                    entry["exit_capable"] = s->is_exit_capable;
+                    entry["last_activity"] = s->last_activity_at().time_since_epoch().count();
+                }
+                else
+                {
+                    entry["session_live"] = false;
+                    entry["exit_capable"] = false;
+                }
+                exits.push_back(std::move(entry));
+            }
+            return exits;
+        });
+        SetJSONResponse(exits, listexits.response);
     }
 
     void RPCServer::invoke(FirstHops& firsthops)
@@ -553,28 +680,63 @@ namespace srouter::rpc
 
         try
         {
-            // for (auto& ip : unmapexit.request.ip_range)
-            //   _router.hidden_service_context().GetDefault()->UnmapExitRange(ip);
-        }
-        catch (std::exception& e)
-        {
-            SetJSONError("Unable to unmap to given range", unmapexit.response);
-            return;
-        }
+            if (unmapexit.request.address.empty())
+                throw std::invalid_argument{"address required"};
+            NetworkAddress exit_addr{unmapexit.request.address};
 
-        SetJSONResponse("OK", unmapexit.response);
+            bool erased = _router._jq->call_get([&] {
+                if (_router.mutable_exit_ranges().erase(exit_addr) == 0)
+                    return false;
+                _router.exit_map_changed();
+                return true;
+            });
+            if (not erased)
+                throw std::invalid_argument{"no mapping for that address"};
+
+            log::info(logcat, "Unmapped exit {}", exit_addr);
+            SetJSONResponse("OK", unmapexit.response);
+        }
+        catch (const std::exception& e)
+        {
+            SetJSONError(e.what(), unmapexit.response);
+        }
     }
 
-    //  Sequentially calls map_exit and unmap_exit to hotswap mapped connection from old exit
-    //  to new exit. Similar to how map_exit steals the oxenmq deferredsend object, swapexit
-    //  moves the replier object to the unmap_exit struct, as that is called second. Rather than
-    //  the nested lambda within map_exit making the reply call, it instead calls the unmap_exit
-    //  logic and leaves the message handling to the unmap_exit struct
+    //  Replaces the mapping for exit_addresses[0] with one for exit_addresses[1] in one step.
+    //  [A, A] remaps A.
     void RPCServer::invoke(SwapExits& swapexits)
     {
         log_print_rpc(swapexits);
 
-        // TODO: this
+        try
+        {
+            if (swapexits.request.exit_addresses.size() != 2)
+                throw std::invalid_argument{"exit_addresses must be [old, new]"};
+            auto old_addr = parse_exit_address(swapexits.request.exit_addresses[0]);
+            auto new_addr = parse_exit_address(swapexits.request.exit_addresses[1]);
+            auto built = build_exit_ranges(swapexits.request.ip_ranges, swapexits.request.full_tunnel);
+            const auto count = built.size();
+
+            bool swapped = _router._jq->call_get([&] {
+                auto& ranges = _router.mutable_exit_ranges();
+                if (ranges.erase(old_addr) == 0)
+                    return false;
+                _router.session_endpoint().set_auth_token(new_addr, swapexits.request.token);
+                ranges[new_addr] = std::move(built);
+                start_exit_session(_router, new_addr);
+                _router.exit_map_changed();
+                return true;
+            });
+            if (not swapped)
+                throw std::invalid_argument{"no mapping for exit_addresses[0]"};
+
+            log::info(logcat, "Swapped exit {} for {} ({} range(s))", old_addr, new_addr, count);
+            SetJSONResponse("swapped {} -> {} ({} range(s))"_format(old_addr, new_addr, count), swapexits.response);
+        }
+        catch (const std::exception& e)
+        {
+            SetJSONError(e.what(), swapexits.response);
+        }
     }
 
 #if 0

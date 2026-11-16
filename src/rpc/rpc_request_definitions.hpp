@@ -166,6 +166,7 @@ namespace srouter::rpc
         struct request_parameters
         {
             std::string address;
+            bool full_tunnel{false};
             std::vector<std::string> ip_ranges;
             std::string token;
         } request;
@@ -232,6 +233,8 @@ namespace srouter::rpc
         struct request_parameters
         {
             std::vector<std::string> exit_addresses;
+            bool full_tunnel{false};
+            std::vector<std::string> ip_ranges;
             std::string token;
         } request;
     };

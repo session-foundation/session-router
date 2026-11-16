@@ -1198,6 +1198,13 @@ namespace srouter::session
             /*allow_cache=*/false);
     }
 
+    void Session::set_exit_capable(bool v)
+    {
+        if (v and not is_exit_capable)
+            log::info(logcat, "EXIT_CAPABLE address={} (session marked exit-capable)", _remote);
+        is_exit_capable = v;
+    }
+
     void OutboundClientSession::update_intros(const ClientContact& cc)
     {
         log::debug(logcat, "Update session {} intros from client contact: {}", *this, cc);
@@ -1206,6 +1213,7 @@ namespace srouter::session
         _next_cc_update = now + CC_FETCH_STALE;
         _cc_last_signed = cc.signed_at();
         _cc_protos = cc.protocols();
+        set_exit_capable(cc.exit_policy().has_value() and not cc.exit_policy()->empty());
         last_inbound_activity = now;  // so we don't just fetch for inactivity again right away
         auto intros = cc.intros();
         _intros.assign(intros.begin(), intros.end());
