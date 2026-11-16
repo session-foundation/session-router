@@ -369,6 +369,11 @@ namespace srouter::vpn
 
         void make_blackhole(int cmd, int flags, int af)
         {
+            // The blackhole goes in the main table, not local: when the local and main tables are
+            // not merged (IPv6 always, IPv4 as soon as any custom `ip rule` exists) the local table
+            // is consulted first, so a /0 blackhole there would swallow every main-table route,
+            // including the routes via the TUN and the first-hop host routes.  In main it only
+            // catches what no more specific route covers.
             NLRequest nl_request{};
             /* Initialize request structure */
             nl_request.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
@@ -376,16 +381,21 @@ namespace srouter::vpn
             nl_request.n.nlmsg_type = cmd;
             nl_request.n.nlmsg_pid = getpid();
             nl_request.r.rtm_family = af;
-            nl_request.r.rtm_table = RT_TABLE_LOCAL;
+            nl_request.r.rtm_table = RT_TABLE_MAIN;
             nl_request.r.rtm_type = RTN_BLACKHOLE;
             nl_request.r.rtm_scope = RT_SCOPE_UNIVERSE;
             if (af == AF_INET)
             {
+                // Metric 0, and added without NLM_F_EXCL so that it is prepended ahead of an
+                // existing metric 0 default route rather than rejected.
                 ipv4 addr{};
                 nl_request.AddData(RTA_DST, &addr.addr, sizeof(addr.addr));
             }
             else
             {
+                // IPv6 treats metric 0 as 1024 (the usual default route metric), so use 1.
+                uint32_t prio = 1;
+                nl_request.AddData(RTA_PRIORITY, &prio, sizeof(prio));
                 std::array<uint64_t, 2> addr{};
                 nl_request.AddData(RTA_DST, &addr, sizeof(addr));
             }
@@ -599,7 +609,7 @@ namespace srouter::vpn
 
         void add_blackhole() override
         {
-            make_blackhole(RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, AF_INET);
+            make_blackhole(RTM_NEWROUTE, NLM_F_CREATE, AF_INET);
             make_blackhole(RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, AF_INET6);
         }
 
