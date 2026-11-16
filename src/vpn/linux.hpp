@@ -401,6 +401,8 @@ namespace srouter::vpn
             nl_request.n.nlmsg_type = cmd;
             nl_request.n.nlmsg_pid = getpid();
             nl_request.r.rtm_table = RT_TABLE_MAIN;
+            // RT_SCOPE_NOWHERE acts as a wildcard when deleting, but the kernel rejects it with
+            // EINVAL ("Invalid scope") when adding a route, so new routes default to universe scope.
             nl_request.r.rtm_scope = RT_SCOPE_NOWHERE;
 
             /* Set additional flags if NOT deleting route */
@@ -408,6 +410,7 @@ namespace srouter::vpn
             {
                 nl_request.r.rtm_protocol = RTPROT_BOOT;
                 nl_request.r.rtm_type = RTN_UNICAST;
+                nl_request.r.rtm_scope = RT_SCOPE_UNIVERSE;
             }
 
             return nl_request;
@@ -450,14 +453,14 @@ namespace srouter::vpn
             oxenc::write_host_as_big(gw.lo, gwbuf + 8);
             oxenc::write_host_as_big(dst.ip.hi, ipbuf);
             oxenc::write_host_as_big(dst.ip.lo, ipbuf + 8);
-            nl_request.AddData(RTA_GATEWAY, gwbuf, sizeof(gwbuf));
+            // Routes via our own interface: unlike IPv4, the kernel refuses a local address as an
+            // IPv6 gateway (EINVAL, "Gateway can not be a local address"), so route by interface.
+            if (mode != GatewayMode::Default)
+                nl_request.AddData(RTA_GATEWAY, gwbuf, sizeof(gwbuf));
             nl_request.AddData(RTA_DST, ipbuf, sizeof(ipbuf));
 
-            if (mode == GatewayMode::FirstHop)
-            {
-                /* Set interface */
-                nl_request.AddData(RTA_OIF, &if_idx, sizeof(if_idx));
-            }
+            /* Set interface */
+            nl_request.AddData(RTA_OIF, &if_idx, sizeof(if_idx));
             /* Send message to the netlink */
             send(fd, &nl_request, sizeof(nl_request), 0);
         }
@@ -570,21 +573,26 @@ namespace srouter::vpn
             const auto& ifname = vpn.interface_info().ifname;
             std::vector<quic::Address> gateways{};
 
+            // /proc/net/route columns are tab-separated: Iface, Destination, Gateway, Flags, RefCnt,
+            // Use, Metric, Mask, ...  Destination, Gateway and Mask are the raw network-order
+            // in_addr_t printed as a native-endian hex integer (e.g. 64.177.42.1 is "012AB140" on a
+            // little-endian host), so they have to be parsed as an integer, not as a byte string.
             std::ifstream inf{"/proc/net/route"};
             for (std::string line; std::getline(inf, line);)
             {
                 const auto parts = split(line, "\t");
-                if (parts[1].find_first_not_of('0') == std::string::npos and parts[0] != ifname)
-                {
-                    const auto& ip = parts[2];
-                    if ((ip.size() == sizeof(uint32_t) * 2) and oxenc::is_hex(ip))
-                    {
-                        std::string buf;
-                        oxenc::from_hex(ip.begin(), ip.end(), buf.data());
-                        quic::Address addr{buf, 0};
-                        gateways.push_back(std::move(addr));
-                    }
-                }
+                if (parts.size() < 8 or parts[0] == ifname)
+                    continue;
+
+                // Only default routes (0.0.0.0/0); this also skips the header line.
+                in_addr dst{}, gw{}, mask{};
+                if (not parse_int(parts[1], dst.s_addr, 16) or not parse_int(parts[2], gw.s_addr, 16)
+                    or not parse_int(parts[7], mask.s_addr, 16))
+                    continue;
+                if (dst.s_addr != 0 or mask.s_addr != 0 or gw.s_addr == 0)
+                    continue;
+
+                gateways.emplace_back(ipv4{gw}, 0);
             }
             return gateways;
         }
