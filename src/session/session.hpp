@@ -381,6 +381,10 @@ namespace srouter
             virtual void tick(sys_ms now);
 
             virtual path::Path::Info current_path_info() const { return {}; };
+
+            // The session's other established paths, which it holds ready to switch to; only an
+            // outbound session builds paths of its own.
+            virtual std::vector<path::Path::Info> standby_path_info() const { return {}; };
         };
 
         class OutboundSession : public path::PathHandler, public Session
@@ -486,6 +490,8 @@ namespace srouter
             inline static constexpr int MAX_QUEUED_PACKETS = 30;
 
             path::Path::Info current_path_info() const override;
+
+            std::vector<path::Path::Info> standby_path_info() const override;
         };
 
         // Outbound Session to Remote Relay
