@@ -56,6 +56,8 @@ namespace srouter::handlers
       public:
         vpn::NetworkInterface* get_vpn_interface() { return _net_if.get(); }
 
+        std::pair<bool, std::string_view> exit_route_status() const override;
+
         std::string_view name() const { return TUN; }
 
         void configure();

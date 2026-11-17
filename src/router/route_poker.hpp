@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <string_view>
 #include <unordered_map>
 
 namespace srouter
@@ -70,6 +71,7 @@ namespace srouter
 
         bool enabled() const { return _enabled; }
         bool is_up() const { return _up; }
+        std::string_view routes_reason() const;
 
       private:
         // Discovers the gateways and pins first-hop host routes; returns false (and stays down) if
@@ -138,6 +140,7 @@ namespace srouter
         bool _enabled{false};
         bool _default_up{false};
         bool _blackhole_up{false};
+        const char* _down_reason{nullptr};
         std::set<ipv4_range> _tun_routes4;
         std::set<ipv6_range> _tun_routes6;
     };

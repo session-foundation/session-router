@@ -154,6 +154,15 @@ namespace srouter::handlers
             /*persistent=*/true);
     }
 
+    std::pair<bool, std::string_view> TunEndpoint::exit_route_status() const
+    {
+        if (not _route_poker)
+            return {false, "no vpn interface"};
+        if (_route_poker->is_up())
+            return {true, {}};
+        return {false, _route_poker->routes_reason()};
+    }
+
     void TunEndpoint::restart_exit_sessions()
     {
         // After every edge connection has gone, a session to a mapped exit is left on paths that

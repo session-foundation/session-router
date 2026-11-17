@@ -220,12 +220,14 @@ namespace srouter
         if (not _router.vpn_platform() or not _tun.get_vpn_interface())
         {
             log::warning(logcat, "Route poker: no VPN interface; not installing exit routes");
+            _down_reason = "no vpn interface";
             return false;
         }
 
         if (not current_gateway4 and not current_gateway6)
         {
             log::warning(logcat, "Route poker: no default gateway found; not installing exit routes");
+            _down_reason = "no default gateway";
             return false;
         }
 
@@ -285,9 +287,11 @@ namespace srouter
                 unpinned,
                 pinned + unpinned);
             _up = false;
+            _down_reason = "first hop not pinned";
             return false;
         }
 
+        _down_reason = nullptr;
         log::info(logcat, "Route poker up; pinned {} first-hop route(s)", pinned);
         return true;
     }
@@ -401,6 +405,7 @@ namespace srouter
         catch (const std::exception& e)
         {
             log::warning(logcat, "Route poker: failed to install exit routes ({}); taking them down", e.what());
+            _down_reason = "route refused";
             put_down();
             schedule_retry();
         }
@@ -460,6 +465,15 @@ namespace srouter
 
         delete_all_routes();
         log::info(logcat, "Route poker down");
+    }
+
+    std::string_view RoutePoker::routes_reason() const
+    {
+        if (_up)
+            return {};
+        if (not _enabled)
+            return "auto-routing disabled";
+        return _down_reason ? std::string_view{_down_reason} : std::string_view{};
     }
 
 }  // namespace srouter
