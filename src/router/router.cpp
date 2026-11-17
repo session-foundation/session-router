@@ -438,6 +438,12 @@ namespace srouter
                 if (srv.target == "localhost.{}"_format(CLIENT_TLD) || srv.target == "localhost.loki")
                     srv.target = "{}.{}"_format(id(), CLIENT_TLD);
             }
+
+            // An exit advertises its traffic policy in its ClientContact (clients only treat a
+            // remote as an exit when it carries one) and enforces it on the TUN; both read it from
+            // the network config.
+            if (_config.exit.exit_enabled)
+                netconf.traffic_policy = _config.exit.exit_policy;
         }
     }
 
@@ -446,6 +452,10 @@ namespace srouter
         log::trace(logcat, "{} called", __PRETTY_FUNCTION__);
         if (!embedded())
             sys::service_manager->starting();
+
+        if (_config.exit.exit_enabled and _config.exit.exit_policy.ranges.empty()
+            and _config.exit.exit_policy.ranges_v6.empty())
+            throw std::runtime_error{"[exit]:enable=true requires at least one [exit]:routed-range"};
 
         if (_config.exit.exit_enabled and is_service_node)
             throw std::runtime_error{

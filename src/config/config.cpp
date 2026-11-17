@@ -312,9 +312,10 @@ namespace srouter
             FullClientOnly,
             MultiValue,
             Comment{
-                "Advertise that exit node routes exit traffic to the specified IP range. If omitted, the",
-                "default is ALL public ranges.  Can be set to public to indicate that this exit",
-                "routes traffic to the public internet.",
+                "Advertise that exit node routes exit traffic to the specified IP range. At least one",
+                "is required when the exit is enabled; traffic to other ranges is dropped.  Can be set",
+                "to public to indicate that this exit routes traffic to the public internet (IPv4 and",
+                "IPv6).",
                 "For example:",
                 "    routed-range=10.0.0.0/16",
                 "    routed-range=public",
@@ -326,7 +327,10 @@ namespace srouter
             },
             [this](std::string arg) {
                 if (arg == "public")
+                {
                     exit_policy.ranges.push_back(ipv4{0} / 0);
+                    exit_policy.ranges_v6.push_back(ipv6{} / 0);
+                }
                 else
                 {
                     try
