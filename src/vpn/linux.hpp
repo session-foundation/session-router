@@ -531,11 +531,18 @@ namespace srouter::vpn
             return submit(nl_request);
         }
 
+        // For routes via the TUN.  These are added with NLM_F_EXCL and removed by us, so EEXIST
+        // means someone else (another VPN, say) already has a route to the same prefix with the
+        // same metric, and traffic would go their way instead: treat it as a failure.
         static void check(int cmd, int err, std::string_view what)
         {
-            if (benign(cmd, err))
+            if (err == 0 or (cmd == RTM_DELROUTE and err == ESRCH))
                 return;
-            auto msg = "Failed to {} {}: {}"_format(cmd == RTM_NEWROUTE ? "add" : "remove", what, strerror(err));
+            auto msg = "Failed to {} {}: {}{}"_format(
+                cmd == RTM_NEWROUTE ? "add" : "remove",
+                what,
+                strerror(err),
+                err == EEXIST ? " (another route to it already exists)" : "");
             if (cmd == RTM_NEWROUTE)
                 throw std::runtime_error{msg};
             log::warning(logcat, "{}", msg);
@@ -583,14 +590,14 @@ namespace srouter::vpn
             if (auto it = idx.find(gateway); it != idx.end())
                 if_idx = it->second;
             int err = route_cmd(cmd, flags, dest / bits, gateway, GatewayMode::FirstHop, if_idx);
-            if (not benign(cmd, err))
-                log::warning(
-                    logcat,
-                    "Failed to {} route to {} via {}: {}",
-                    cmd == RTM_NEWROUTE ? "add" : "remove",
-                    dest,
-                    gateway,
-                    strerror(err));
+            if (benign(cmd, err))
+                return;
+            auto msg = "Failed to {} route to {} via {}: {}"_format(
+                cmd == RTM_NEWROUTE ? "add" : "remove", dest, gateway, strerror(err));
+            // A host route that didn't go in must not be counted as pinned, so adds throw.
+            if (cmd == RTM_NEWROUTE)
+                throw std::runtime_error{msg};
+            log::warning(logcat, "{}", msg);
         }
 
         // Default (::/0) IPv6 routes with a gateway, from /proc/net/ipv6_route.  Each line is:
