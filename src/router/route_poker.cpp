@@ -4,6 +4,8 @@
 #include "link/link_manager.hpp"
 #include "router.hpp"
 
+#include <algorithm>
+
 namespace srouter
 {
     static auto logcat = log::Cat("route_poker");
@@ -45,12 +47,13 @@ namespace srouter
 
         // Already routed via the current gateway: leave it alone.  Deleting and re-adding the
         // host route would, for a moment, send this first hop's traffic down the default route
-        // (i.e. into the TUN once it is up) and break the live connection.
-        if (!new_route and gw == *current_gw)
+        // (i.e. into the TUN once it is up) and break the live connection.  After the gateway
+        // was gone the pin was taken out, so it goes back in even via the same gateway.
+        if (!new_route and gw == *current_gw and not _repin)
             return;
 
         // remove existing mapping (via an old gateway) as needed
-        if (!new_route and gw != IP{})
+        if (!new_route and gw != IP{} and gw != *current_gw)
             disable_route(ip, gw);
         gw = IP{};
 
@@ -187,6 +190,8 @@ namespace srouter
         }
 
         bool changed = false;
+        if ((next4 and not current_gateway4) or (next6 and not current_gateway6))
+            _repin = true;
         if (next4 != current_gateway4)
         {
             if (next4 and current_gateway4)
@@ -212,6 +217,7 @@ namespace srouter
 
         if (changed)
             refresh_all_routes();
+        _repin = false;
     }
 
     bool RoutePoker::put_up()
@@ -297,6 +303,7 @@ namespace srouter
 
         _down_reason = nullptr;
         log::info(logcat, "Route poker up; pinned {} first-hop route(s)", pinned);
+        schedule_gateway_check();
         return true;
     }
 
@@ -429,6 +436,27 @@ namespace srouter
         });
     }
 
+    void RoutePoker::schedule_gateway_check()
+    {
+        if (_check_pending)
+            return;
+        _check_pending = true;
+        _router.loop().call_later(GATEWAY_CHECK_INTERVAL, [this, alive = std::weak_ptr{_alive}] {
+            if (alive.expired())
+                return;
+            _check_pending = false;
+            if (not _up)
+                return;  // put_up() starts the checks again
+            const bool had = is_up();
+            update();
+            if (had and not is_up())
+                log::warning(logcat, "Route poker: default gateway gone; exit routes held, first hops unpinned");
+            else if (not had and is_up())
+                log::info(logcat, "Route poker: default gateway back; first hops pinned again");
+            schedule_gateway_check();
+        });
+    }
+
     void RoutePoker::edges_lost()
     {
         if (not _up)
@@ -442,6 +470,7 @@ namespace srouter
             log::info(logcat, "Route poker: no edge connections; keeping the exit routes until they reconnect");
             return;
         }
+        _down_reason = "no edge connections";
         put_down();
     }
 
@@ -471,10 +500,22 @@ namespace srouter
         log::info(logcat, "Route poker down");
     }
 
+    bool RoutePoker::is_up() const
+    {
+        if (not _up or (not current_gateway4 and not current_gateway6))
+            return false;
+        // A family whose pins went in needs its gateway; one that never had any (no IPv6 on this
+        // host, say) doesn't.
+        auto pinned = [](const auto& routes) {
+            return std::ranges::any_of(routes, [](const auto& r) { return r.second != decltype(r.second){}; });
+        };
+        return (current_gateway4 or not pinned(poked_routes4)) and (current_gateway6 or not pinned(poked_routes6));
+    }
+
     std::string_view RoutePoker::routes_reason() const
     {
         if (_up)
-            return {};
+            return is_up() ? std::string_view{} : std::string_view{"default gateway gone"};
         if (not _enabled)
             return "auto-routing disabled";
         return _down_reason ? std::string_view{_down_reason} : std::string_view{};

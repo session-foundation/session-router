@@ -70,7 +70,11 @@ namespace srouter
         // resolver goes through the exit, which can't reach a private one.
 
         bool enabled() const { return _enabled; }
-        bool is_up() const { return _up; }
+        /// True while the exit routes are installed and there is a default gateway (outside the
+        /// TUN) for each address family that has first hops pinned.  When the gateway goes, the routes
+        /// stay in place and the first-hop pins come out; this reports false, with a reason, until
+        /// it is back.
+        bool is_up() const;
         std::string_view routes_reason() const;
 
       private:
@@ -86,6 +90,15 @@ namespace srouter
         void schedule_retry();
         static constexpr std::chrono::seconds RETRY_INTERVAL{5};
         bool _retry_pending{false};
+
+        // While the routes are up, re-checks the default gateway every few seconds, so a link that
+        // goes away (or comes back) shows up in is_up() without waiting for the edges to time out.
+        void schedule_gateway_check();
+        static constexpr std::chrono::seconds GATEWAY_CHECK_INTERVAL{2};
+        bool _check_pending{false};
+        // Set by update() when a gateway reappears after none: the old pins were taken out, so
+        // they have to go back in even if the gateway is the same one as before.
+        bool _repin{false};
         std::shared_ptr<bool> _alive = std::make_shared<bool>(true);
 
         void delete_all_routes();
