@@ -590,6 +590,19 @@ namespace srouter::rpc
             return exit_addr;
         }
 
+        nlohmann::json route_status_json(Router& router)
+        {
+            bool up = false;
+            std::string_view reason{"no vpn interface"};
+            if (const auto& tun = router.tun_endpoint())
+                std::tie(up, reason) = tun->exit_route_status();
+            nlohmann::json j;
+            j["routes_up"] = up;
+            if (not up and not reason.empty())
+                j["routes_reason"] = reason;
+            return j;
+        }
+
         void start_exit_session(Router& router, const NetworkAddress& exit_addr)
         {
             try
@@ -616,15 +629,17 @@ namespace srouter::rpc
             auto built = build_exit_ranges(mapexit.request.ip_ranges, mapexit.request.full_tunnel);
             const auto count = built.size();
 
-            _router._jq->call_get([&] {
+            auto status = _router._jq->call_get([&] {
                 _router.session_endpoint().set_auth_token(exit_addr, mapexit.request.token);
                 _router.mutable_exit_ranges()[exit_addr] = std::move(built);
                 start_exit_session(_router, exit_addr);
                 _router.exit_map_changed();
+                return route_status_json(_router);
             });
 
             log::info(logcat, "Mapped {} range(s) via exit {}", count, exit_addr);
-            SetJSONResponse("mapped {} range(s) via {}"_format(count, exit_addr), mapexit.response);
+            status["message"] = "mapped {} range(s) via {}"_format(count, exit_addr);
+            SetJSONResponse(status, mapexit.response);
         }
         catch (const std::exception& e)
         {
@@ -636,7 +651,8 @@ namespace srouter::rpc
     {
         log_print_rpc(listexits);
 
-        auto exits = _router._jq->call_get([this] {
+        auto payload = _router._jq->call_get([this] {
+            auto out = route_status_json(_router);
             nlohmann::json exits = nlohmann::json::array();
             for (const auto& [addr, range_list] : _router.exit_ranges())
             {
@@ -657,18 +673,12 @@ namespace srouter::rpc
                     entry["session_live"] = false;
                     entry["exit_capable"] = false;
                 }
-                bool routes_up = false;
-                std::string_view routes_reason{"no vpn interface"};
-                if (const auto& tun = _router.tun_endpoint())
-                    std::tie(routes_up, routes_reason) = tun->exit_route_status();
-                entry["routes_up"] = routes_up;
-                if (not routes_up and not routes_reason.empty())
-                    entry["routes_reason"] = routes_reason;
                 exits.push_back(std::move(entry));
             }
-            return exits;
+            out["exits"] = std::move(exits);
+            return out;
         });
-        SetJSONResponse(exits, listexits.response);
+        SetJSONResponse(payload, listexits.response);
     }
 
     void RPCServer::invoke(FirstHops& firsthops)
