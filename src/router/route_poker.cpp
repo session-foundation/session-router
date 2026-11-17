@@ -35,7 +35,11 @@ namespace srouter
         auto& current_gw = current_gateway<IP>();
         if (!current_gw)
         {
-            gw = IP{};
+            // The gateway has gone (a Wi-Fi drop, say).  Take the pin out of the kernel now
+            // and keep the last gateway in the map, so a later one can still find and replace
+            // the /32 if the delete did not go through.
+            if (gw != IP{})
+                disable_route(ip, gw);
             return;
         }
 

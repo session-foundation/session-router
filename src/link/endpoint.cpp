@@ -1109,6 +1109,9 @@ namespace srouter::link
     std::pair<std::shared_ptr<quic::Connection>, std::shared_ptr<quic::BTRequestStream>>
     Endpoint::testing_client_connect(const RelayContact& rc)
     {
+        router.poke_first_hop(rc.addr());
+        if (rc.addr6())
+            router.poke_first_hop(*rc.addr6());
         return special_connect_impl(*endpoint, rc, CLIENT_ALPN, router.config().links.congestion_control);
     }
 

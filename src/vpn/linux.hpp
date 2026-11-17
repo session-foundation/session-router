@@ -644,7 +644,12 @@ namespace srouter::vpn
                     mode = GatewayMode::Default;
             }
             int err = route_cmd(cmd, flags, dest / bits, gateway, mode, if_idx);
-            if (benign(cmd, err))
+            // EEXIST means a pin to this host already exists, possibly via a different
+            // gateway.  Replacing it is required; treating EEXIST as success would leave
+            // the kernel pointing at the old one.
+            if (cmd == RTM_NEWROUTE and err == EEXIST)
+                err = route_cmd(cmd, NLM_F_CREATE | NLM_F_REPLACE, dest / bits, gateway, mode, if_idx);
+            if (err == 0 or (cmd == RTM_DELROUTE and err == ESRCH))
                 return;
             auto msg = "Failed to {} route to {} via {}: {}"_format(
                 cmd == RTM_NEWROUTE ? "add" : "remove", dest, gateway, strerror(err));
