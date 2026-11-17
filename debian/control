@@ -29,7 +29,7 @@ Vcs-Browser: https://github.com/session-foundation/session-router
 
 Package: session-router-bin
 Architecture: any
-Depends: libsessionrouter1.1 (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
+Depends: libsessionrouter1.1 (= ${binary:Version}), adduser, ${shlibs:Depends}, ${misc:Depends}
 Description: Session network anonymous, decentralized onion routing network -- binaries
  Session Router is an IP packet onion routing network that powers low-latency,
  anonymous IP routing, as used on the Session messenger network.
@@ -76,7 +76,7 @@ Description: Session network anonymous, decentralized onion routing network -- d
 
 Package: session-router-client
 Architecture: all
-Depends: session-router-bin (=${binary:Version}), adduser, ucf
+Depends: session-router-bin (=${binary:Version}), ucf
 Recommends: resolvconf
 Description: Session network anonymous, decentralized onion routing network -- client service
  Session Router is an IP packet onion routing network that powers low-latency,
@@ -90,7 +90,7 @@ Description: Session network anonymous, decentralized onion routing network -- c
 
 Package: session-router-relay
 Architecture: all
-Depends: session-router-bin (=${binary:Version}), oxend, adduser, ucf
+Depends: session-router-bin (=${binary:Version}), oxend, ucf
 Description: Session network anonymous, decentralized onion routing network -- service node relay
  Session Router is an IP packet onion routing network that powers low-latency,
  anonymous IP routing, as used on the Session messenger network.
