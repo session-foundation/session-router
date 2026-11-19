@@ -74,6 +74,11 @@ namespace srouter::vpn
         virtual void add_blackhole() {}
 
         virtual void delete_blackhole() {}
+
+        // Removes routes an earlier run left behind (killed with routes up).  Called once at
+        // start when route poking is enabled.  It can't tell those from the routes of another
+        // instance that is running with route poking on, so only one per machine should be.
+        virtual void delete_stale_routes() {}
     };
 
     /// a vpn platform

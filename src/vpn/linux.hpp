@@ -28,6 +28,12 @@ namespace srouter::vpn
 {
     static auto logcat = log::Cat("vpn.linux");
 
+    // Route protocol number put on every route we add, so that routes left behind by a run that
+    // didn't shut down cleanly can be found and removed at the next start (see
+    // delete_stale_routes), and so that our deletes never remove somebody else's identical route.
+    // Values above RTPROT_STATIC aren't interpreted by the kernel.
+    inline constexpr uint8_t RTPROT_SROUTER = 212;
+
     // Interface kinds (IFLA_INFO_KIND) that are tunnels or overlays, never the uplink.
     inline constexpr std::array<std::string_view, 21> TUNNEL_KINDS{
         "wireguard", "tun", "tap",  "sit",  "ipip",   "ip6tnl", "gre",     "gretap", "ip6gre", "ip6gretap", "erspan",
@@ -474,6 +480,7 @@ namespace srouter::vpn
             nl_request.r.rtm_family = af;
             nl_request.r.rtm_table = RT_TABLE_MAIN;
             nl_request.r.rtm_type = RTN_BLACKHOLE;
+            nl_request.r.rtm_protocol = RTPROT_SROUTER;
             nl_request.r.rtm_scope = RT_SCOPE_UNIVERSE;
             if (af == AF_INET)
             {
@@ -514,11 +521,12 @@ namespace srouter::vpn
             // RT_SCOPE_NOWHERE acts as a wildcard when deleting, but the kernel rejects it with
             // EINVAL ("Invalid scope") when adding a route, so new routes default to universe scope.
             nl_request.r.rtm_scope = RT_SCOPE_NOWHERE;
+            // On deletes this restricts the match to our own routes.
+            nl_request.r.rtm_protocol = RTPROT_SROUTER;
 
             /* Set additional flags if NOT deleting route */
             if (cmd != RTM_DELROUTE)
             {
-                nl_request.r.rtm_protocol = RTPROT_BOOT;
                 nl_request.r.rtm_type = RTN_UNICAST;
                 nl_request.r.rtm_scope = RT_SCOPE_UNIVERSE;
             }
@@ -762,7 +770,7 @@ namespace srouter::vpn
                     return;
                 auto* rt = static_cast<rtmsg*>(NLMSG_DATA(h));
                 if (rt->rtm_family != af or rt->rtm_dst_len != 0 or rt->rtm_type != RTN_UNICAST
-                    or (rt->rtm_flags & (RTNH_F_DEAD | RTNH_F_LINKDOWN)))
+                    or rt->rtm_protocol == RTPROT_SROUTER or (rt->rtm_flags & (RTNH_F_DEAD | RTNH_F_LINKDOWN)))
                     return;
                 uint32_t table = rt->rtm_table, metric = 0;
                 int oif = 0;
@@ -912,7 +920,7 @@ namespace srouter::vpn
         // metric first (ties go to the lower interface index).  A default route only counts if
         // its interface is up with a carrier and isn't the TUN, another VPN or overlay tunnel, or
         // loopback; PPP and cellular links do count, with or without a gateway.  Routes the kernel
-        // marks dead or link-down are skipped.
+        // marks dead or link-down, and our own, are skipped.
         std::vector<quic::Address> get_non_interface_gateways(NetworkInterface& vpn) override
         {
             const auto& ifname = vpn.interface_info().ifname;
@@ -971,6 +979,52 @@ namespace srouter::vpn
         {
             make_blackhole(RTM_DELROUTE, 0, AF_INET);
             make_blackhole(RTM_DELROUTE, 0, AF_INET6);
+        }
+
+        // Removes every main-table route carrying our protocol number: the blackholes and
+        // first-hop host routes a run that was killed left behind.  (Routes via its TUN went
+        // away with the device.)  Another instance running with route poking on uses the same
+        // protocol number, so its routes would go too; that setup isn't supported.
+        void delete_stale_routes() override
+        {
+            std::vector<std::vector<char>> stale;
+            for (int af : {AF_INET, AF_INET6})
+            {
+                struct
+                {
+                    nlmsghdr header;
+                    rtmsg content;
+                } req{};
+                req.header.nlmsg_len = NLMSG_LENGTH(sizeof req.content);
+                req.header.nlmsg_type = RTM_GETROUTE;
+                req.content.rtm_family = static_cast<unsigned char>(af);
+                int err = nl_dump(req, [&stale](nlmsghdr* h) {
+                    auto* rt = static_cast<rtmsg*>(NLMSG_DATA(h));
+                    if (h->nlmsg_type == RTM_NEWROUTE and rt->rtm_protocol == RTPROT_SROUTER
+                        and rt->rtm_table == RT_TABLE_MAIN)
+                        stale.emplace_back(reinterpret_cast<char*>(h), reinterpret_cast<char*>(h) + h->nlmsg_len);
+                });
+                if (err)
+                    log::warning(logcat, "Failed to list IPv{} routes: {}", af == AF_INET ? 4 : 6, strerror(err));
+            }
+
+            int removed = 0;
+            for (auto& msg : stale)
+            {
+                NLRequest req{};
+                if (msg.size() > sizeof(req))
+                    continue;
+                std::memcpy(&req, msg.data(), msg.size());
+                req.header.nlmsg_type = RTM_DELROUTE;
+                req.header.nlmsg_flags = NLM_F_REQUEST;
+                req.header.nlmsg_pid = 0;
+                if (int err = submit(req); not benign(RTM_DELROUTE, err))
+                    log::warning(logcat, "Failed to remove a route left by an earlier run: {}", strerror(err));
+                else
+                    ++removed;
+            }
+            if (removed)
+                log::info(logcat, "Removed {} route(s) left behind by an earlier run", removed);
         }
     };
 
