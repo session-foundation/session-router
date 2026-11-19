@@ -3,6 +3,7 @@
 #include "config/config.hpp"
 #include "constants/version.hpp"
 #include "contact/client_contact.hpp"
+#include "link/link_manager.hpp"
 #include "router/router.hpp"
 #include "rpc/rpc_request_definitions.hpp"
 #include "rpc_request.hpp"
@@ -11,6 +12,7 @@
 #include <oxenc/base32z.h>
 
 #include <exception>
+#include <set>
 #include <vector>
 
 namespace srouter::rpc
@@ -531,6 +533,18 @@ namespace srouter::rpc
         log_print_rpc(listexits);
 
         // TODO: this
+    }
+
+    void RPCServer::invoke(FirstHops& firsthops)
+    {
+        log_print_rpc(firsthops);
+
+        auto addrs = _router._jq->call_get([this] { return _router.link_manager().endpoint.first_hop_addrs(); });
+        std::set<std::string> hosts;
+        for (const auto& a : addrs)
+            hosts.insert(a.host());
+
+        SetJSONResponse(nlohmann::json{{"first_hops", hosts}}, firsthops.response);
     }
 
     void RPCServer::invoke(UnmapExit& unmapexit)
