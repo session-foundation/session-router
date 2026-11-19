@@ -3,14 +3,15 @@
 #include "common.hpp"
 #include "platform.hpp"
 #include "router/router.hpp"
-#include "util/str.hpp"
 
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
+#include <linux/if_link.h>
 #include <linux/if_tun.h>
 #include <linux/rtnetlink.h>
 #include <net/if.h>
+#include <net/if_arp.h>
 #include <net/route.h>
 #include <oxenc/endian.h>
 #include <sys/socket.h>
@@ -19,15 +20,46 @@
 
 #include <algorithm>
 #include <cstring>
-#include <fstream>
-#include <sstream>
 #include <stdexcept>
-#include <tuple>
+#include <string_view>
 #include <unordered_map>
 
 namespace srouter::vpn
 {
     static auto logcat = log::Cat("vpn.linux");
+
+    // Interface kinds (IFLA_INFO_KIND) that are tunnels or overlays, never the uplink.
+    inline constexpr std::array<std::string_view, 21> TUNNEL_KINDS{
+        "wireguard", "tun", "tap",  "sit",  "ipip",   "ip6tnl", "gre",     "gretap", "ip6gre", "ip6gretap", "erspan",
+        "ip6erspan", "vti", "vti6", "xfrm", "geneve", "vxlan",  "bareudp", "amt",    "ipvlan", "macsec"};
+
+    // Names VPN clients commonly give their interfaces.
+    inline constexpr std::array<std::string_view, 10> TUNNEL_NAMES{
+        "wg", "tun", "tap", "tailscale", "mullvad", "utun", "nordlynx", "proton", "zt", "ipsec"};
+
+    // Real uplinks that are point-to-point or have no link-layer header (PPP, PPPoE, cellular
+    // modems).  Never treated as tunnels, whatever their kind says.
+    inline constexpr std::array<std::string_view, 6> UPLINK_NAMES{"ppp", "wwan", "rmnet", "usb", "mbim", "qmi"};
+
+    // Whether an interface is a VPN or overlay tunnel (or loopback) rather than a possible uplink.
+    // The point-to-point flag and a missing link-layer header are deliberately not used: PPP and
+    // raw-IP cellular modems have both and are real uplinks.
+    inline bool is_tunnel_link(std::string_view name, std::string_view kind, bool loopback)
+    {
+        auto prefixed = [name](const auto& list) {
+            return std::ranges::any_of(list, [name](std::string_view p) { return name.starts_with(p); });
+        };
+        if (loopback)
+            return true;
+        if (prefixed(UPLINK_NAMES))
+            return false;
+        if (std::ranges::find(TUNNEL_KINDS, kind) != TUNNEL_KINDS.end())
+            return true;
+        // tun/tap devices have this whatever they are called.
+        if (not name.empty() and access("/sys/class/net/{}/tun_flags"_format(name).c_str(), F_OK) == 0)
+            return true;
+        return prefixed(TUNNEL_NAMES);
+    }
 
     struct in6_ifreq
     {
@@ -365,10 +397,18 @@ namespace srouter::vpn
         const int fd;
         uint32_t seq = 0;
 
-        // Interface index of each discovered default gateway, so that host routes via a link-local
-        // (e.g. fe80::1) IPv6 gateway can name the device the kernel needs.
-        std::unordered_map<ipv4, int> gw_ifindex4;
-        std::unordered_map<ipv6, int> gw_ifindex6;
+        // Where each discovered default gateway is: the interface index, so that host routes via
+        // a link-local (e.g. fe80::1) IPv6 gateway can name the device the kernel needs, and
+        // whether the default route has no gateway at all (`default dev ppp0`).  Gateway-less
+        // uplinks are keyed by one of the interface's own addresses, which stands in for the
+        // gateway in the generic code; host routes then go straight out of the device.
+        struct gw_info
+        {
+            int ifindex;
+            bool device_only;
+        };
+        std::unordered_map<ipv4, gw_info> gw_info4;
+        std::unordered_map<ipv6, gw_info> gw_info6;
 
         enum class GatewayMode
         {
@@ -581,15 +621,21 @@ namespace srouter::vpn
         {
             constexpr uint8_t bits = std::same_as<IP, ipv4> ? 32 : 128;
             int if_idx = 0;
-            auto& idx = [this]() -> auto& {
+            auto mode = GatewayMode::FirstHop;
+            auto& info = [this]() -> auto& {
                 if constexpr (std::same_as<IP, ipv4>)
-                    return gw_ifindex4;
+                    return gw_info4;
                 else
-                    return gw_ifindex6;
+                    return gw_info6;
             }();
-            if (auto it = idx.find(gateway); it != idx.end())
-                if_idx = it->second;
-            int err = route_cmd(cmd, flags, dest / bits, gateway, GatewayMode::FirstHop, if_idx);
+            if (auto it = info.find(gateway); it != info.end())
+            {
+                if_idx = it->second.ifindex;
+                // No gateway: straight out of the device, like a route via the TUN.
+                if (it->second.device_only)
+                    mode = GatewayMode::Default;
+            }
+            int err = route_cmd(cmd, flags, dest / bits, gateway, mode, if_idx);
             if (benign(cmd, err))
                 return;
             auto msg = "Failed to {} route to {} via {}: {}"_format(
@@ -600,31 +646,213 @@ namespace srouter::vpn
             log::warning(logcat, "{}", msg);
         }
 
-        // Default (::/0) IPv6 routes with a gateway, from /proc/net/ipv6_route.  Each line is:
-        //   dest dest_plen src src_plen next_hop metric refcnt use flags devname
-        // with addresses as 32 hex digits in network order and the rest as hex integers.
-        void ipv6_default_gateways(std::string_view ifname, std::vector<std::tuple<uint32_t, ipv6, int>>& out)
+        // Sends a dump request on its own socket and calls `f` with each reply message until the
+        // kernel says it's done.  Returns 0 or an errno value.
+        template <typename Req, typename F>
+        static int nl_dump(Req& req, F&& f)
         {
-            std::ifstream inf{"/proc/net/ipv6_route"};
-            for (std::string line; std::getline(inf, line);)
+            int nlfd = socket(AF_NETLINK, SOCK_DGRAM | SOCK_CLOEXEC, NETLINK_ROUTE);
+            if (nlfd == -1)
+                return errno;
+            call_on_destroy closer{[nlfd] { close(nlfd); }};
+            timeval tv{.tv_sec = 2, .tv_usec = 0};
+            setsockopt(nlfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+            req.header.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+            req.header.nlmsg_seq = 1;
+            if (-1 == send(nlfd, &req, req.header.nlmsg_len, 0))
+                return errno;
+
+            alignas(nlmsghdr) static thread_local char buf[32768];
+            for (;;)
             {
-                std::istringstream ls{line};
-                std::string dst, dst_len, src, src_len, nh, metric, refcnt, use, flags, dev;
-                if (not(ls >> dst >> dst_len >> src >> src_len >> nh >> metric >> refcnt >> use >> flags >> dev))
-                    continue;
-                if (dev == ifname or dst.find_first_not_of('0') != std::string::npos or dst_len != "00"
-                    or nh.size() != 32)
-                    continue;
-                uint32_t m{}, fl{};
-                ipv6 gw{};
-                if (not parse_int(metric, m, 16) or not parse_int(flags, fl, 16)
-                    or not parse_int(std::string_view{nh}.substr(0, 16), gw.hi, 16)
-                    or not parse_int(std::string_view{nh}.substr(16), gw.lo, 16))
-                    continue;
-                if (not(fl & RTF_GATEWAY) or (fl & RTF_REJECT) or gw == ipv6{})
-                    continue;
-                out.emplace_back(m, gw, static_cast<int>(if_nametoindex(dev.c_str())));
+                auto got = recv(nlfd, buf, sizeof(buf), 0);
+                if (got < 0)
+                {
+                    if (errno == EINTR)
+                        continue;
+                    return errno;
+                }
+                auto len = static_cast<unsigned int>(got);
+                for (auto* h = reinterpret_cast<nlmsghdr*>(buf); NLMSG_OK(h, len); h = NLMSG_NEXT(h, len))
+                {
+                    if (h->nlmsg_seq != req.header.nlmsg_seq)
+                        continue;
+                    if (h->nlmsg_type == NLMSG_DONE)
+                        return 0;
+                    if (h->nlmsg_type == NLMSG_ERROR)
+                    {
+                        auto* e = static_cast<nlmsgerr*>(NLMSG_DATA(h));
+                        return e->error < 0 ? -e->error : EPROTO;
+                    }
+                    f(h);
+                }
             }
+        }
+
+        struct link_state
+        {
+            std::string name;
+            bool usable;  // up, has carrier, and not a tunnel or loopback
+        };
+
+        static std::unordered_map<int, link_state> dump_links()
+        {
+            std::unordered_map<int, link_state> links;
+            struct
+            {
+                nlmsghdr header;
+                ifinfomsg content;
+            } req{};
+            req.header.nlmsg_len = NLMSG_LENGTH(sizeof req.content);
+            req.header.nlmsg_type = RTM_GETLINK;
+            req.content.ifi_family = AF_UNSPEC;
+            int err = nl_dump(req, [&links](nlmsghdr* h) {
+                if (h->nlmsg_type != RTM_NEWLINK)
+                    return;
+                auto* ifi = static_cast<ifinfomsg*>(NLMSG_DATA(h));
+                std::string name, kind;
+                int len = IFLA_PAYLOAD(h);
+                for (auto* a = IFLA_RTA(ifi); RTA_OK(a, len); a = RTA_NEXT(a, len))
+                {
+                    if (a->rta_type == IFLA_IFNAME)
+                        name = static_cast<const char*>(RTA_DATA(a));
+                    else if (a->rta_type == IFLA_LINKINFO)
+                    {
+                        int ilen = RTA_PAYLOAD(a);
+                        for (auto* i = static_cast<rtattr*>(RTA_DATA(a)); RTA_OK(i, ilen); i = RTA_NEXT(i, ilen))
+                            if (i->rta_type == IFLA_INFO_KIND)
+                                kind = static_cast<const char*>(RTA_DATA(i));
+                    }
+                }
+                // IFF_LOWER_UP lives in <linux/if.h>, which clashes with <net/if.h>.
+                constexpr unsigned lower_up = 1 << 16;
+                const auto fl = ifi->ifi_flags;
+                bool up = (fl & IFF_UP) and (fl & (IFF_RUNNING | lower_up));
+                bool loopback = (fl & IFF_LOOPBACK) or ifi->ifi_type == ARPHRD_LOOPBACK;
+                links[ifi->ifi_index] = {name, up and not is_tunnel_link(name, kind, loopback)};
+            });
+            if (err)
+                log::warning(logcat, "Failed to list network interfaces: {}", strerror(err));
+            return links;
+        }
+
+        // One next hop of a default route in the main table.
+        struct default_hop
+        {
+            uint32_t metric;
+            int ifindex;
+            std::optional<std::array<uint8_t, 16>> gateway;  // first 4 bytes for IPv4
+        };
+
+        static std::vector<default_hop> dump_default_hops(int af)
+        {
+            std::vector<default_hop> hops;
+            struct
+            {
+                nlmsghdr header;
+                rtmsg content;
+            } req{};
+            req.header.nlmsg_len = NLMSG_LENGTH(sizeof req.content);
+            req.header.nlmsg_type = RTM_GETROUTE;
+            req.content.rtm_family = static_cast<unsigned char>(af);
+            const size_t alen = af == AF_INET ? 4 : 16;
+            int err = nl_dump(req, [&](nlmsghdr* h) {
+                if (h->nlmsg_type != RTM_NEWROUTE)
+                    return;
+                auto* rt = static_cast<rtmsg*>(NLMSG_DATA(h));
+                if (rt->rtm_family != af or rt->rtm_dst_len != 0 or rt->rtm_type != RTN_UNICAST
+                    or (rt->rtm_flags & (RTNH_F_DEAD | RTNH_F_LINKDOWN)))
+                    return;
+                uint32_t table = rt->rtm_table, metric = 0;
+                int oif = 0;
+                std::optional<std::array<uint8_t, 16>> gw;
+                auto read_gw = [alen](const rtattr* a) {
+                    std::array<uint8_t, 16> g{};
+                    if (RTA_PAYLOAD(a) >= alen)
+                        std::memcpy(g.data(), RTA_DATA(a), alen);
+                    return g;
+                };
+                const rtattr* multipath = nullptr;
+                int len = RTM_PAYLOAD(h);
+                for (auto* a = RTM_RTA(rt); RTA_OK(a, len); a = RTA_NEXT(a, len))
+                {
+                    switch (a->rta_type)
+                    {
+                        case RTA_TABLE:
+                            table = *static_cast<const uint32_t*>(RTA_DATA(a));
+                            break;
+                        case RTA_PRIORITY:
+                            metric = *static_cast<const uint32_t*>(RTA_DATA(a));
+                            break;
+                        case RTA_OIF:
+                            oif = *static_cast<const int*>(RTA_DATA(a));
+                            break;
+                        case RTA_GATEWAY:
+                            gw = read_gw(a);
+                            break;
+                        case RTA_MULTIPATH:
+                            multipath = a;
+                            break;
+                    }
+                }
+                if (table != RT_TABLE_MAIN)
+                    return;
+                if (not multipath)
+                {
+                    if (oif)
+                        hops.push_back({metric, oif, gw});
+                    return;
+                }
+                // ECMP: each next hop is an rtnexthop followed by its own attributes.
+                int mlen = RTA_PAYLOAD(multipath);
+                for (auto* nh = static_cast<const rtnexthop*>(RTA_DATA(multipath));
+                     mlen >= static_cast<int>(sizeof(rtnexthop)) and nh->rtnh_len >= sizeof(rtnexthop)
+                     and static_cast<int>(nh->rtnh_len) <= mlen;
+                     mlen -= RTNH_ALIGN(nh->rtnh_len), nh = RTNH_NEXT(nh))
+                {
+                    if (nh->rtnh_flags & (RTNH_F_DEAD | RTNH_F_LINKDOWN))
+                        continue;
+                    std::optional<std::array<uint8_t, 16>> nhgw;
+                    int alen_left = nh->rtnh_len - sizeof(rtnexthop);
+                    for (auto* a = RTNH_DATA(nh); RTA_OK(a, alen_left); a = RTA_NEXT(a, alen_left))
+                        if (a->rta_type == RTA_GATEWAY)
+                            nhgw = read_gw(a);
+                    hops.push_back({metric, nh->rtnh_ifindex, nhgw});
+                }
+            });
+            if (err)
+                log::warning(logcat, "Failed to list IPv{} routes: {}", af == AF_INET ? 4 : 6, strerror(err));
+            return hops;
+        }
+
+        // One of the interface's own addresses in the given family, preferring a global one, to
+        // stand in for the gateway of a gateway-less default route.
+        static std::optional<std::array<uint8_t, 16>> own_address(const std::string& ifname, int af)
+        {
+            ifaddrs* head;
+            if (getifaddrs(&head) != 0)
+                return std::nullopt;
+            call_on_destroy freer{[head] { freeifaddrs(head); }};
+            std::optional<std::array<uint8_t, 16>> found;
+            for (auto* ia = head; ia; ia = ia->ifa_next)
+            {
+                if (not ia->ifa_addr or ia->ifa_addr->sa_family != af or ifname != ia->ifa_name)
+                    continue;
+                std::array<uint8_t, 16> a{};
+                if (af == AF_INET)
+                {
+                    std::memcpy(a.data(), &reinterpret_cast<sockaddr_in*>(ia->ifa_addr)->sin_addr, 4);
+                    return a;
+                }
+                const auto& in6 = reinterpret_cast<sockaddr_in6*>(ia->ifa_addr)->sin6_addr;
+                std::memcpy(a.data(), &in6, 16);
+                if (not IN6_IS_ADDR_LINKLOCAL(&in6))
+                    return a;
+                if (not found)
+                    found = a;
+            }
+            return found;
         }
 
       public:
@@ -680,51 +908,55 @@ namespace srouter::vpn
             route_range_via_interface(RTM_DELROUTE, 0, vpn, range);
         }
 
-        // Returns the default gateways not on the TUN, IPv4 then IPv6, each lowest metric first.
+        // Returns the default gateways that can carry traffic now, IPv4 then IPv6, each lowest
+        // metric first (ties go to the lower interface index).  A default route only counts if
+        // its interface is up with a carrier and isn't the TUN, another VPN or overlay tunnel, or
+        // loopback; PPP and cellular links do count, with or without a gateway.  Routes the kernel
+        // marks dead or link-down are skipped.
         std::vector<quic::Address> get_non_interface_gateways(NetworkInterface& vpn) override
         {
             const auto& ifname = vpn.interface_info().ifname;
-            std::vector<std::tuple<uint32_t, ipv4, int>> gw4;
-            std::vector<std::tuple<uint32_t, ipv6, int>> gw6;
-
-            // /proc/net/route columns are tab-separated: Iface, Destination, Gateway, Flags, RefCnt,
-            // Use, Metric, Mask, ...  Destination, Gateway and Mask are the raw network-order
-            // in_addr_t printed as a native-endian hex integer (e.g. 64.177.42.1 is "012AB140" on a
-            // little-endian host), so they have to be parsed as an integer, not as a byte string.
-            std::ifstream inf{"/proc/net/route"};
-            for (std::string line; std::getline(inf, line);)
-            {
-                const auto parts = split(line, "\t");
-                if (parts.size() < 8 or parts[0] == ifname)
-                    continue;
-
-                // Only default routes (0.0.0.0/0); this also skips the header line.
-                in_addr dst{}, gw{}, mask{};
-                uint32_t metric{};
-                if (not parse_int(parts[1], dst.s_addr, 16) or not parse_int(parts[2], gw.s_addr, 16)
-                    or not parse_int(parts[6], metric) or not parse_int(parts[7], mask.s_addr, 16))
-                    continue;
-                if (dst.s_addr != 0 or mask.s_addr != 0 or gw.s_addr == 0)
-                    continue;
-
-                gw4.emplace_back(metric, ipv4{gw}, static_cast<int>(if_nametoindex(std::string{parts[0]}.c_str())));
-            }
-
-            ipv6_default_gateways(ifname, gw6);
-
-            std::ranges::stable_sort(gw4, {}, [](const auto& t) { return std::get<0>(t); });
-            std::ranges::stable_sort(gw6, {}, [](const auto& t) { return std::get<0>(t); });
+            const auto links = dump_links();
 
             std::vector<quic::Address> gateways{};
-            for (const auto& [metric, gw, idx] : gw4)
+            gw_info4.clear();
+            gw_info6.clear();
+            for (int af : {AF_INET, AF_INET6})
             {
-                gw_ifindex4[gw] = idx;
-                gateways.emplace_back(gw, 0);
-            }
-            for (const auto& [metric, gw, idx] : gw6)
-            {
-                gw_ifindex6[gw] = idx;
-                gateways.emplace_back(gw, 0);
+                auto hops = dump_default_hops(af);
+                std::ranges::stable_sort(hops, {}, [](const auto& h) { return std::pair{h.metric, h.ifindex}; });
+                for (const auto& hop : hops)
+                {
+                    auto it = links.find(hop.ifindex);
+                    if (it == links.end() or not it->second.usable or it->second.name == ifname)
+                        continue;
+                    bool device_only = not hop.gateway;
+                    auto addr = device_only ? own_address(it->second.name, af) : hop.gateway;
+                    if (not addr)
+                        continue;
+                    if (af == AF_INET)
+                    {
+                        in_addr a{};
+                        std::memcpy(&a, addr->data(), 4);
+                        ipv4 gw{a};
+                        if (gw == ipv4{} or not gw_info4.emplace(gw, gw_info{hop.ifindex, device_only}).second)
+                            continue;
+                        gateways.emplace_back(gw, 0);
+                    }
+                    else
+                    {
+                        ipv6 gw{std::span<const uint8_t, 16>{addr->data(), 16}};
+                        if (gw == ipv6{} or not gw_info6.emplace(gw, gw_info{hop.ifindex, device_only}).second)
+                            continue;
+                        gateways.emplace_back(gw, 0);
+                    }
+                    log::debug(
+                        logcat,
+                        "Default route candidate: {} metric {}",
+                        device_only ? "dev {}"_format(it->second.name)
+                                    : "via {} dev {}"_format(gateways.back().host(), it->second.name),
+                        hop.metric);
+                }
             }
             return gateways;
         }
