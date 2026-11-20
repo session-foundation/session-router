@@ -296,6 +296,10 @@ namespace srouter
                 "Route poker: {} of {} first-hop route(s) could not be pinned; not installing exit routes",
                 unpinned,
                 pinned + unpinned);
+            // Take out the pins that did go in: with nothing via the TUN they aren't needed, and
+            // put_down() won't see them once we're not up (an unmap before the retry succeeds
+            // would leave them behind).  The retry pins everything again.
+            disable_all_routes();
             _up = false;
             _down_reason = "first hop not pinned";
             return false;
