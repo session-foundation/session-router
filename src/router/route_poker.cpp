@@ -137,10 +137,19 @@ namespace srouter
 
     void RoutePoker::disable_all_routes()
     {
-        for (const auto& [ip, gateway] : poked_routes4)
+        // Forget the gateways too: add_route() skips a hop whose remembered gateway matches the
+        // current one, so a remembered gateway here would make the next put_up() trust a pin that
+        // is no longer in the kernel.
+        for (auto& [ip, gateway] : poked_routes4)
+        {
             disable_route(ip, gateway);
-        for (const auto& [ip, gateway] : poked_routes6)
+            gateway = ipv4{};
+        }
+        for (auto& [ip, gateway] : poked_routes6)
+        {
             disable_route(ip, gateway);
+            gateway = ipv6{};
+        }
     }
 
     void RoutePoker::refresh_all_routes()
@@ -298,7 +307,8 @@ namespace srouter
                 pinned + unpinned);
             // Take out the pins that did go in: with nothing via the TUN they aren't needed, and
             // put_down() won't see them once we're not up (an unmap before the retry succeeds
-            // would leave them behind).  The retry pins everything again.
+            // would leave them behind).  Their remembered gateways are cleared as well, so the
+            // retry pins everything again instead of trusting routes that are gone.
             disable_all_routes();
             _up = false;
             _down_reason = "first hop not pinned";
