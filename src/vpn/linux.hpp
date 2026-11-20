@@ -644,11 +644,35 @@ namespace srouter::vpn
                     mode = GatewayMode::Default;
             }
             int err = route_cmd(cmd, flags, dest / bits, gateway, mode, if_idx);
-            // EEXIST means a pin to this host already exists, possibly via a different
-            // gateway.  Replacing it is required; treating EEXIST as success would leave
-            // the kernel pointing at the old one.
+            // EEXIST means a host route with the same metric is already there.  If it's ours (an
+            // earlier pin, possibly via a gateway that has since changed) replace it; treating
+            // EEXIST as success would leave the kernel pointing at the old gateway.  Somebody
+            // else's route is never replaced or removed: if it already goes the way we would
+            // send it, that's as good as our pin; otherwise the add fails, so the host doesn't
+            // count as pinned and nothing is sent via the TUN.
             if (cmd == RTM_NEWROUTE and err == EEXIST)
-                err = route_cmd(cmd, NLM_F_CREATE | NLM_F_REPLACE, dest / bits, gateway, mode, if_idx);
+            {
+                auto existing = find_host_route(dest);
+                if (existing and existing->protocol == RTPROT_SROUTER)
+                    err = route_cmd(cmd, NLM_F_CREATE | NLM_F_REPLACE, dest / bits, gateway, mode, if_idx);
+                else if (
+                    existing and existing->oif == if_idx
+                    and existing->gateway == (mode == GatewayMode::FirstHop ? std::optional{gateway} : std::nullopt))
+                {
+                    log::info(
+                        logcat,
+                        "A route to {} that isn't ours already goes via {}; leaving it in place",
+                        dest,
+                        gateway);
+                    return;
+                }
+                else
+                {
+                    throw std::runtime_error{
+                        "Not pinning {}: another route to it (protocol {}) is already there and goes "
+                        "elsewhere; leaving it alone"_format(dest, existing ? int{existing->protocol} : -1)};
+                }
+            }
             if (err == 0 or (cmd == RTM_DELROUTE and err == ESRCH))
                 return;
             auto msg = "Failed to {} route to {} via {}: {}"_format(
@@ -701,6 +725,74 @@ namespace srouter::vpn
                     f(h);
                 }
             }
+        }
+
+        template <typename IP>
+        struct host_route
+        {
+            uint8_t protocol;
+            int oif;
+            std::optional<IP> gateway;
+        };
+
+        // The main-table host route (/32 or /128) to `dest` at the metric our pins get (0 for
+        // IPv4, 1024 for IPv6, the kernel defaults), if there is one.
+        template <typename IP>
+        static std::optional<host_route<IP>> find_host_route(const IP& dest)
+        {
+            constexpr bool v4 = std::same_as<IP, ipv4>;
+            constexpr int af = v4 ? AF_INET : AF_INET6;
+            constexpr size_t alen = v4 ? 4 : 16;
+            constexpr uint32_t want_metric = v4 ? 0 : 1024;
+            std::array<char, 16> want{};
+            if constexpr (v4)
+                oxenc::write_host_as_big(dest.addr, want.data());
+            else
+            {
+                oxenc::write_host_as_big(dest.hi, want.data());
+                oxenc::write_host_as_big(dest.lo, want.data() + 8);
+            }
+
+            std::optional<host_route<IP>> found;
+            struct
+            {
+                nlmsghdr header;
+                rtmsg content;
+            } req{};
+            req.header.nlmsg_len = NLMSG_LENGTH(sizeof req.content);
+            req.header.nlmsg_type = RTM_GETROUTE;
+            req.content.rtm_family = af;
+            nl_dump(req, [&](nlmsghdr* h) {
+                auto* rt = static_cast<rtmsg*>(NLMSG_DATA(h));
+                if (found or h->nlmsg_type != RTM_NEWROUTE or rt->rtm_family != af or rt->rtm_dst_len != alen * 8)
+                    return;
+                uint32_t table = rt->rtm_table, metric = 0;
+                bool dst_match = false;
+                host_route<IP> r{rt->rtm_protocol, 0, std::nullopt};
+                int len = RTM_PAYLOAD(h);
+                for (auto* a = RTM_RTA(rt); RTA_OK(a, len); a = RTA_NEXT(a, len))
+                {
+                    if (a->rta_type == RTA_TABLE)
+                        table = *static_cast<const uint32_t*>(RTA_DATA(a));
+                    else if (a->rta_type == RTA_PRIORITY)
+                        metric = *static_cast<const uint32_t*>(RTA_DATA(a));
+                    else if (a->rta_type == RTA_OIF)
+                        r.oif = *static_cast<const int*>(RTA_DATA(a));
+                    else if (a->rta_type == RTA_DST and RTA_PAYLOAD(a) == alen)
+                        dst_match = std::memcmp(RTA_DATA(a), want.data(), alen) == 0;
+                    else if (a->rta_type == RTA_GATEWAY and RTA_PAYLOAD(a) == alen)
+                    {
+                        auto* g = static_cast<const uint8_t*>(RTA_DATA(a));
+                        if constexpr (v4)
+                            r.gateway = ipv4{oxenc::load_big_to_host<uint32_t>(g)};
+                        else
+                            r.gateway = ipv6{std::span<const uint8_t, 16>{g, 16}};
+                    }
+                }
+                if (dst_match and table == RT_TABLE_MAIN and metric == want_metric)
+                    found = r;
+            });
+            return found;
         }
 
         struct link_state
