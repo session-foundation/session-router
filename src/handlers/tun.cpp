@@ -660,7 +660,8 @@ namespace srouter::handlers
         (void)type;
         // A normal .sesh packet arrives with its addresses cleared (dest 0.0.0.0 or ::), so only
         // a packet with a real destination is exit traffic, even on an exit.
-        const bool real_dest = pkt.is_ipv4() ? *pkt.dest_ipv4() != ipv4{} : pkt.is_ipv6() and *pkt.dest_ipv6() != ipv6{};
+        const bool real_dest =
+            pkt.is_ipv4() ? (*pkt.dest_ipv4() != ipv4{}) : (pkt.is_ipv6() and *pkt.dest_ipv6() != ipv6{});
         const bool to_exit = is_exit_node() and real_dest;
         const bool from_exit = (not to_exit) and remote_is_exit_broker(remote);
 
