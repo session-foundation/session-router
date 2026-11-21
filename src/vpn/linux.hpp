@@ -3,25 +3,69 @@
 #include "common.hpp"
 #include "platform.hpp"
 #include "router/router.hpp"
-#include "util/str.hpp"
 
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
+#include <linux/if_link.h>
 #include <linux/if_tun.h>
 #include <linux/rtnetlink.h>
 #include <net/if.h>
+#include <net/if_arp.h>
+#include <net/route.h>
 #include <oxenc/endian.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
+#include <string_view>
+#include <unordered_map>
 
 namespace srouter::vpn
 {
     static auto logcat = log::Cat("vpn.linux");
+
+    // Route protocol number put on every route we add, so that routes left behind by a run that
+    // didn't shut down cleanly can be found and removed at the next start (see
+    // delete_stale_routes), and so that our deletes never remove somebody else's identical route.
+    // Values above RTPROT_STATIC aren't interpreted by the kernel.
+    inline constexpr uint8_t RTPROT_SROUTER = 212;
+
+    // Interface kinds (IFLA_INFO_KIND) that are tunnels or overlays, never the uplink.
+    inline constexpr std::array<std::string_view, 21> TUNNEL_KINDS{
+        "wireguard", "tun", "tap",  "sit",  "ipip",   "ip6tnl", "gre",     "gretap", "ip6gre", "ip6gretap", "erspan",
+        "ip6erspan", "vti", "vti6", "xfrm", "geneve", "vxlan",  "bareudp", "amt",    "ipvlan", "macsec"};
+
+    // Names VPN clients commonly give their interfaces.
+    inline constexpr std::array<std::string_view, 10> TUNNEL_NAMES{
+        "wg", "tun", "tap", "tailscale", "mullvad", "utun", "nordlynx", "proton", "zt", "ipsec"};
+
+    // Real uplinks that are point-to-point or have no link-layer header (PPP, PPPoE, cellular
+    // modems).  Never treated as tunnels, whatever their kind says.
+    inline constexpr std::array<std::string_view, 6> UPLINK_NAMES{"ppp", "wwan", "rmnet", "usb", "mbim", "qmi"};
+
+    // Whether an interface is a VPN or overlay tunnel (or loopback) rather than a possible uplink.
+    // The point-to-point flag and a missing link-layer header are deliberately not used: PPP and
+    // raw-IP cellular modems have both and are real uplinks.
+    inline bool is_tunnel_link(std::string_view name, std::string_view kind, bool loopback)
+    {
+        auto prefixed = [name](const auto& list) {
+            return std::ranges::any_of(list, [name](std::string_view p) { return name.starts_with(p); });
+        };
+        if (loopback)
+            return true;
+        if (prefixed(UPLINK_NAMES))
+            return false;
+        if (std::ranges::find(TUNNEL_KINDS, kind) != TUNNEL_KINDS.end())
+            return true;
+        // tun/tap devices have this whatever they are called.
+        if (not name.empty() and access("/sys/class/net/{}/tun_flags"_format(name).c_str(), F_OK) == 0)
+            return true;
+        return prefixed(TUNNEL_NAMES);
+    }
 
     struct in6_ifreq
     {
@@ -41,25 +85,50 @@ namespace srouter::vpn
         void disarm() { f = nullptr; }
     };
 
+    // Send a netlink request and wait for its ACK.  Returns 0 on success, otherwise the errno value
+    // the kernel (or send/recv) reported.  Must have set NLM_F_ACK on the request header flags!
+    // Replies whose sequence number does not match the request are skipped.
+    template <typename NLRequestT>
+    int nl_submit_errno(int nlfd, const NLRequestT& req)
+    {
+        assert(req.header.nlmsg_flags & NLM_F_REQUEST);
+        assert(req.header.nlmsg_flags & NLM_F_ACK);
+        log::trace(logcat, "submitting netlink request to fd {}", nlfd);
+        if (-1 == send(nlfd, &req, req.header.nlmsg_len, 0))
+            return errno;
+
+        alignas(nlmsghdr) char resp_buf[8192];
+        for (;;)
+        {
+            log::trace(logcat, "waiting for netlink response");
+            auto resp_len = recv(nlfd, resp_buf, sizeof(resp_buf), 0);
+            if (resp_len < 0)
+            {
+                if (errno == EINTR)
+                    continue;
+                return errno;
+            }
+            log::trace(logcat, "got netlink response");
+            auto len = static_cast<unsigned int>(resp_len);
+            for (auto* resp = reinterpret_cast<nlmsghdr*>(resp_buf); NLMSG_OK(resp, len); resp = NLMSG_NEXT(resp, len))
+            {
+                if (resp->nlmsg_seq != req.header.nlmsg_seq)
+                    continue;
+                if (resp->nlmsg_type != NLMSG_ERROR)
+                    return EPROTO;
+                auto* nlerr = static_cast<nlmsgerr*>(NLMSG_DATA(resp));
+                return nlerr->error < 0 ? -nlerr->error : 0;
+            }
+        }
+    }
+
     // Send a netlink request and wait for the response.  Returns an error string on error, nullopt
     // on success.  Must have set NLM_F_ACK on the request header flags!
     template <typename NLRequestT>
     std::optional<std::string> nl_submit(int nlfd, const NLRequestT& req)
     {
-        assert(req.header.nlmsg_flags & NLM_F_REQUEST);
-        log::trace(logcat, "submitting netlink request to fd {}", nlfd);
-        if (-1 == send(nlfd, &req, req.header.nlmsg_len, 0))
-            return strerror(errno);
-
-        char resp_buf[4096];
-        log::trace(logcat, "waiting for netlink response");
-        auto resp_len = recv(nlfd, resp_buf, sizeof(resp_buf), 0);
-        log::trace(logcat, "got netlink response");
-        auto* resp = reinterpret_cast<nlmsghdr*>(resp_buf);
-        if (!NLMSG_OK(resp, resp_len) || resp->nlmsg_type != NLMSG_ERROR)
-            return "Invalid netlink response"s;
-        if (auto* nlerr = reinterpret_cast<nlmsgerr*>(NLMSG_DATA(resp_buf)); nlerr->error < 0)
-            return strerror(-nlerr->error);
+        if (int err = nl_submit_errno(nlfd, req))
+            return strerror(err);
         return std::nullopt;
     }
 
@@ -332,6 +401,20 @@ namespace srouter::vpn
     class LinuxRouteManager : public AbstractRouteManager
     {
         const int fd;
+        uint32_t seq = 0;
+
+        // Where each discovered default gateway is: the interface index, so that host routes via
+        // a link-local (e.g. fe80::1) IPv6 gateway can name the device the kernel needs, and
+        // whether the default route has no gateway at all (`default dev ppp0`).  Gateway-less
+        // uplinks are keyed by one of the interface's own addresses, which stands in for the
+        // gateway in the generic code; host routes then go straight out of the device.
+        struct gw_info
+        {
+            int ifindex;
+            bool device_only;
+        };
+        std::unordered_map<ipv4, gw_info> gw_info4;
+        std::unordered_map<ipv6, gw_info> gw_info6;
 
         enum class GatewayMode
         {
@@ -341,7 +424,7 @@ namespace srouter::vpn
 
         struct NLRequest
         {
-            nlmsghdr n;
+            nlmsghdr header;
             rtmsg r;
             char buf[4096];
 
@@ -351,98 +434,133 @@ namespace srouter::vpn
 
                 int len = RTA_LENGTH(alen);
                 rtattr* rta;
-                if (NLMSG_ALIGN(n.nlmsg_len) + RTA_ALIGN(len) > sizeof(*this))
+                if (NLMSG_ALIGN(header.nlmsg_len) + RTA_ALIGN(len) > sizeof(*this))
                 {
                     throw std::length_error{"nlrequest add data overflow"};
                 }
-                rta = NLMSG_TAIL(&n);
+                rta = NLMSG_TAIL(&header);
                 rta->rta_type = type;
                 rta->rta_len = len;
                 if (alen)
                 {
                     memcpy(RTA_DATA(rta), data, alen);
                 }
-                n.nlmsg_len = NLMSG_ALIGN(n.nlmsg_len) + RTA_ALIGN(len);
+                header.nlmsg_len = NLMSG_ALIGN(header.nlmsg_len) + RTA_ALIGN(len);
 #undef NLMSG_TAIL
             }
         };
 
+        // Submits the request and waits for the kernel's ACK; returns 0 or the errno value.
+        int submit(NLRequest& req)
+        {
+            req.header.nlmsg_flags |= NLM_F_ACK;
+            req.header.nlmsg_seq = ++seq;
+            return nl_submit_errno(fd, req);
+        }
+
+        // Adding something that is already there, or deleting something that is already gone, is
+        // not an error for our purposes.
+        static bool benign(int cmd, int err)
+        {
+            return err == 0 or (cmd == RTM_NEWROUTE and err == EEXIST) or (cmd == RTM_DELROUTE and err == ESRCH);
+        }
+
         void make_blackhole(int cmd, int flags, int af)
         {
+            // The blackhole goes in the main table, not local: when the local and main tables are
+            // not merged (IPv6 always, IPv4 as soon as any custom `ip rule` exists) the local table
+            // is consulted first, so a /0 blackhole there would swallow every main-table route,
+            // including the routes via the TUN and the first-hop host routes.  In main it only
+            // catches what no more specific route covers.
             NLRequest nl_request{};
-            /* Initialize request structure */
-            nl_request.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
-            nl_request.n.nlmsg_flags = NLM_F_REQUEST | flags;
-            nl_request.n.nlmsg_type = cmd;
-            nl_request.n.nlmsg_pid = getpid();
+            nl_request.header.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
+            nl_request.header.nlmsg_flags = NLM_F_REQUEST | flags;
+            nl_request.header.nlmsg_type = cmd;
+            nl_request.header.nlmsg_pid = getpid();
             nl_request.r.rtm_family = af;
-            nl_request.r.rtm_table = RT_TABLE_LOCAL;
+            nl_request.r.rtm_table = RT_TABLE_MAIN;
             nl_request.r.rtm_type = RTN_BLACKHOLE;
+            nl_request.r.rtm_protocol = RTPROT_SROUTER;
             nl_request.r.rtm_scope = RT_SCOPE_UNIVERSE;
             if (af == AF_INET)
             {
+                // Metric 0, like a default route added without one.  Routes with the same prefix
+                // and metric are tried in list order, and an add without NLM_F_EXCL or
+                // NLM_F_APPEND goes to the front (`ip route prepend`), so the blackhole wins over
+                // an existing metric 0 default instead of being rejected.  EEXIST only comes back
+                // if the same blackhole is already there.
                 ipv4 addr{};
                 nl_request.AddData(RTA_DST, &addr.addr, sizeof(addr.addr));
             }
             else
             {
+                // IPv6 treats metric 0 as 1024 (the usual default route metric), so use 1.
+                uint32_t prio = 1;
+                nl_request.AddData(RTA_PRIORITY, &prio, sizeof(prio));
                 std::array<uint64_t, 2> addr{};
                 nl_request.AddData(RTA_DST, &addr, sizeof(addr));
             }
-            send(fd, &nl_request, sizeof(nl_request), 0);
+            if (int err = submit(nl_request); not benign(cmd, err))
+                log::warning(
+                    logcat,
+                    "Failed to {} IPv{} blackhole route: {}",
+                    cmd == RTM_NEWROUTE ? "add" : "remove",
+                    af == AF_INET ? 4 : 6,
+                    strerror(err));
         }
 
         NLRequest init_route_cmd(int cmd, int flags)
         {
             NLRequest nl_request{};
             /* Initialize request structure */
-            nl_request.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
-            nl_request.n.nlmsg_flags = NLM_F_REQUEST | flags;
-            nl_request.n.nlmsg_type = cmd;
-            nl_request.n.nlmsg_pid = getpid();
+            nl_request.header.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
+            nl_request.header.nlmsg_flags = NLM_F_REQUEST | flags;
+            nl_request.header.nlmsg_type = cmd;
+            nl_request.header.nlmsg_pid = getpid();
             nl_request.r.rtm_table = RT_TABLE_MAIN;
+            // RT_SCOPE_NOWHERE acts as a wildcard when deleting, but the kernel rejects it with
+            // EINVAL ("Invalid scope") when adding a route, so new routes default to universe scope.
             nl_request.r.rtm_scope = RT_SCOPE_NOWHERE;
+            // On deletes this restricts the match to our own routes.
+            nl_request.r.rtm_protocol = RTPROT_SROUTER;
 
             /* Set additional flags if NOT deleting route */
             if (cmd != RTM_DELROUTE)
             {
-                nl_request.r.rtm_protocol = RTPROT_BOOT;
                 nl_request.r.rtm_type = RTN_UNICAST;
+                nl_request.r.rtm_scope = RT_SCOPE_UNIVERSE;
             }
 
             return nl_request;
         }
 
-        void route_cmd(int cmd, int flags, const ipv4_range& dst, const ipv4& gw, GatewayMode mode, int if_idx)
+        // Default mode routes go out of interface `if_idx` with no gateway.  FirstHop routes go via
+        // `gw`, and out of `if_idx` when it is non-zero.
+        int route_cmd(int cmd, int flags, const ipv4_range& dst, const ipv4& gw, GatewayMode mode, int if_idx)
         {
             auto nl_request = init_route_cmd(cmd, flags);
 
             nl_request.r.rtm_family = AF_INET;
-            if (if_idx)
+            if (mode == GatewayMode::Default and cmd != RTM_DELROUTE)
                 nl_request.r.rtm_scope = RT_SCOPE_LINK;
             nl_request.r.rtm_dst_len = dst.mask;
 
             char gwbuf[4], ipbuf[4];
             oxenc::write_host_as_big(gw.addr, gwbuf);
             oxenc::write_host_as_big(dst.ip.addr, ipbuf);
-            nl_request.AddData(RTA_GATEWAY, gwbuf, sizeof(gwbuf));
-            nl_request.AddData(RTA_DST, ipbuf, sizeof(ipbuf));
-
             if (mode == GatewayMode::FirstHop)
-            {
-                /* Set interface */
+                nl_request.AddData(RTA_GATEWAY, gwbuf, sizeof(gwbuf));
+            nl_request.AddData(RTA_DST, ipbuf, sizeof(ipbuf));
+            if (if_idx)
                 nl_request.AddData(RTA_OIF, &if_idx, sizeof(if_idx));
-            }
-            /* Send message to the netlink */
-            send(fd, &nl_request, sizeof(nl_request), 0);
+
+            return submit(nl_request);
         }
 
-        void route_cmd(int cmd, int flags, const ipv6_range& dst, const ipv6& gw, GatewayMode mode, int if_idx)
+        int route_cmd(int cmd, int flags, const ipv6_range& dst, const ipv6& gw, GatewayMode mode, int if_idx)
         {
             auto nl_request = init_route_cmd(cmd, flags);
             nl_request.r.rtm_family = AF_INET6;
-            if (if_idx)
-                nl_request.r.rtm_scope = RT_SCOPE_UNIVERSE;
             nl_request.r.rtm_dst_len = dst.mask;
 
             char gwbuf[16], ipbuf[16];
@@ -450,76 +568,309 @@ namespace srouter::vpn
             oxenc::write_host_as_big(gw.lo, gwbuf + 8);
             oxenc::write_host_as_big(dst.ip.hi, ipbuf);
             oxenc::write_host_as_big(dst.ip.lo, ipbuf + 8);
-            nl_request.AddData(RTA_GATEWAY, gwbuf, sizeof(gwbuf));
-            nl_request.AddData(RTA_DST, ipbuf, sizeof(ipbuf));
-
+            // Routes via our own interface go by interface only: the kernel refuses a local
+            // address as an IPv6 gateway (EINVAL, "Gateway can not be a local address").
             if (mode == GatewayMode::FirstHop)
-            {
-                /* Set interface */
+                nl_request.AddData(RTA_GATEWAY, gwbuf, sizeof(gwbuf));
+            nl_request.AddData(RTA_DST, ipbuf, sizeof(ipbuf));
+            if (if_idx)
                 nl_request.AddData(RTA_OIF, &if_idx, sizeof(if_idx));
-            }
-            /* Send message to the netlink */
-            send(fd, &nl_request, sizeof(nl_request), 0);
+
+            return submit(nl_request);
+        }
+
+        // For routes via the TUN.  These are added with NLM_F_EXCL and removed by us, so EEXIST
+        // means someone else (another VPN, say) already has a route to the same prefix with the
+        // same metric, and traffic would go their way instead: treat it as a failure.
+        static void check(int cmd, int err, std::string_view what)
+        {
+            if (err == 0 or (cmd == RTM_DELROUTE and err == ESRCH))
+                return;
+            auto msg = "Failed to {} {}: {}{}"_format(
+                cmd == RTM_NEWROUTE ? "add" : "remove",
+                what,
+                strerror(err),
+                err == EEXIST ? " (another route to it already exists)" : "");
+            if (cmd == RTM_NEWROUTE)
+                throw std::runtime_error{msg};
+            log::warning(logcat, "{}", msg);
         }
 
         void route_all_via_interface(NetworkInterface& vpn, int cmd, int flags)
         {
             const auto& info = vpn.interface_info();
 
-            const auto maybe = Net().get_interface_ipv4(info.ifname);
-            if (not maybe)
-                throw std::runtime_error{"we dont have our own network interface?"};
-            auto& tun_ip = *maybe;
-
             for (const auto& range : {ipv4{0, 0, 0, 0} / 1, ipv4{128, 0, 0, 0} / 1})
-                route_cmd(cmd, flags, range, tun_ip, GatewayMode::Default, info.index);
+                check(
+                    cmd,
+                    route_cmd(cmd, flags, range, ipv4{}, GatewayMode::Default, info.index),
+                    "default route via TUN");
 
-            if (const auto ip6 = Net().get_interface_ipv6(info.ifname))
+            if (Net().get_interface_ipv6(info.ifname))
                 for (uint16_t nibble : {0x0000, 0x4000, 0x8000, 0xc000})
-                    route_cmd(cmd, flags, ipv6{nibble} / 2, *ip6, GatewayMode::Default, info.index);
+                    check(
+                        cmd,
+                        route_cmd(cmd, flags, ipv6{nibble} / 2, ipv6{}, GatewayMode::Default, info.index),
+                        "IPv6 default route via TUN");
         }
 
-        void route_range_via_interface(int cmd, int flags, NetworkInterface& vpn, ipv4_range range)
+        template <typename Range>
+        void route_range_via_interface(int cmd, int flags, NetworkInterface& vpn, Range range)
         {
-            const auto& info = vpn.interface_info();
-            const auto maybe = Net().get_interface_ipv4(info.ifname);
-            if (not maybe)
-                throw std::runtime_error{"Unable to add routed IPv4 range: interface has no IPv4 address"};
-
-            route_cmd(cmd, flags, range, *maybe, GatewayMode::Default, info.index);
-        }
-        void route_range_via_interface(int cmd, int flags, NetworkInterface& vpn, ipv6_range range)
-        {
-            const auto& info = vpn.interface_info();
-            const auto maybe = Net().get_interface_ipv6(info.ifname);
-            if (not maybe)
-                throw std::runtime_error{"Unable to add routed IPv6 range: interface has no IPv6 address"};
-
-            route_cmd(cmd, flags, range, *maybe, GatewayMode::Default, info.index);
+            using IP = std::remove_cvref_t<decltype(range.ip)>;
+            check(
+                cmd,
+                route_cmd(cmd, flags, range, IP{}, GatewayMode::Default, vpn.interface_info().index),
+                "route to {} via TUN"_format(range));
         }
 
-        void route_via_gateway(int cmd, int flags, ipv4_range range, ipv4 gateway)
+        template <typename IP>
+        void route_via_gateway(int cmd, int flags, IP dest, IP gateway)
         {
-            route_cmd(cmd, flags, range, gateway, GatewayMode::FirstHop, 0);
+            constexpr uint8_t bits = std::same_as<IP, ipv4> ? 32 : 128;
+            int if_idx = 0;
+            auto mode = GatewayMode::FirstHop;
+            auto& info = [this]() -> auto& {
+                if constexpr (std::same_as<IP, ipv4>)
+                    return gw_info4;
+                else
+                    return gw_info6;
+            }();
+            if (auto it = info.find(gateway); it != info.end())
+            {
+                if_idx = it->second.ifindex;
+                // No gateway: straight out of the device, like a route via the TUN.
+                if (it->second.device_only)
+                    mode = GatewayMode::Default;
+            }
+            int err = route_cmd(cmd, flags, dest / bits, gateway, mode, if_idx);
+            if (benign(cmd, err))
+                return;
+            auto msg = "Failed to {} route to {} via {}: {}"_format(
+                cmd == RTM_NEWROUTE ? "add" : "remove", dest, gateway, strerror(err));
+            // A host route that didn't go in must not be counted as pinned, so adds throw.
+            if (cmd == RTM_NEWROUTE)
+                throw std::runtime_error{msg};
+            log::warning(logcat, "{}", msg);
         }
-        void route_via_gateway(int cmd, int flags, ipv4 dest, ipv4 gateway)
+
+        // Sends a dump request on its own socket and calls `f` with each reply message until the
+        // kernel says it's done.  Returns 0 or an errno value.
+        template <typename Req, typename F>
+        static int nl_dump(Req& req, F&& f)
         {
-            return route_via_gateway(cmd, flags, dest / 32, gateway);
+            int nlfd = socket(AF_NETLINK, SOCK_DGRAM | SOCK_CLOEXEC, NETLINK_ROUTE);
+            if (nlfd == -1)
+                return errno;
+            call_on_destroy closer{[nlfd] { close(nlfd); }};
+            timeval tv{.tv_sec = 2, .tv_usec = 0};
+            setsockopt(nlfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+            req.header.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+            req.header.nlmsg_seq = 1;
+            if (-1 == send(nlfd, &req, req.header.nlmsg_len, 0))
+                return errno;
+
+            alignas(nlmsghdr) static thread_local char buf[32768];
+            for (;;)
+            {
+                auto got = recv(nlfd, buf, sizeof(buf), 0);
+                if (got < 0)
+                {
+                    if (errno == EINTR)
+                        continue;
+                    return errno;
+                }
+                auto len = static_cast<unsigned int>(got);
+                for (auto* h = reinterpret_cast<nlmsghdr*>(buf); NLMSG_OK(h, len); h = NLMSG_NEXT(h, len))
+                {
+                    if (h->nlmsg_seq != req.header.nlmsg_seq)
+                        continue;
+                    if (h->nlmsg_type == NLMSG_DONE)
+                        return 0;
+                    if (h->nlmsg_type == NLMSG_ERROR)
+                    {
+                        auto* e = static_cast<nlmsgerr*>(NLMSG_DATA(h));
+                        return e->error < 0 ? -e->error : EPROTO;
+                    }
+                    f(h);
+                }
+            }
         }
-        void route_via_gateway(int cmd, int flags, ipv6_range range, ipv6 gateway)
+
+        struct link_state
         {
-            route_cmd(cmd, flags, range, gateway, GatewayMode::FirstHop, 0);
+            std::string name;
+            bool usable;  // up, has carrier, and not a tunnel or loopback
+        };
+
+        static std::unordered_map<int, link_state> dump_links()
+        {
+            std::unordered_map<int, link_state> links;
+            struct
+            {
+                nlmsghdr header;
+                ifinfomsg content;
+            } req{};
+            req.header.nlmsg_len = NLMSG_LENGTH(sizeof req.content);
+            req.header.nlmsg_type = RTM_GETLINK;
+            req.content.ifi_family = AF_UNSPEC;
+            int err = nl_dump(req, [&links](nlmsghdr* h) {
+                if (h->nlmsg_type != RTM_NEWLINK)
+                    return;
+                auto* ifi = static_cast<ifinfomsg*>(NLMSG_DATA(h));
+                std::string name, kind;
+                int len = IFLA_PAYLOAD(h);
+                for (auto* a = IFLA_RTA(ifi); RTA_OK(a, len); a = RTA_NEXT(a, len))
+                {
+                    if (a->rta_type == IFLA_IFNAME)
+                        name = static_cast<const char*>(RTA_DATA(a));
+                    else if (a->rta_type == IFLA_LINKINFO)
+                    {
+                        int ilen = RTA_PAYLOAD(a);
+                        for (auto* i = static_cast<rtattr*>(RTA_DATA(a)); RTA_OK(i, ilen); i = RTA_NEXT(i, ilen))
+                            if (i->rta_type == IFLA_INFO_KIND)
+                                kind = static_cast<const char*>(RTA_DATA(i));
+                    }
+                }
+                // IFF_LOWER_UP lives in <linux/if.h>, which clashes with <net/if.h>.
+                constexpr unsigned lower_up = 1 << 16;
+                const auto fl = ifi->ifi_flags;
+                bool up = (fl & IFF_UP) and (fl & (IFF_RUNNING | lower_up));
+                bool loopback = (fl & IFF_LOOPBACK) or ifi->ifi_type == ARPHRD_LOOPBACK;
+                links[ifi->ifi_index] = {name, up and not is_tunnel_link(name, kind, loopback)};
+            });
+            if (err)
+                log::warning(logcat, "Failed to list network interfaces: {}", strerror(err));
+            return links;
         }
-        void route_via_gateway(int cmd, int flags, ipv6 dest, ipv6 gateway)
+
+        // One next hop of a default route in the main table.
+        struct default_hop
         {
-            return route_via_gateway(cmd, flags, dest / 128, gateway);
+            uint32_t metric;
+            int ifindex;
+            std::optional<std::array<uint8_t, 16>> gateway;  // first 4 bytes for IPv4
+        };
+
+        static std::vector<default_hop> dump_default_hops(int af)
+        {
+            std::vector<default_hop> hops;
+            struct
+            {
+                nlmsghdr header;
+                rtmsg content;
+            } req{};
+            req.header.nlmsg_len = NLMSG_LENGTH(sizeof req.content);
+            req.header.nlmsg_type = RTM_GETROUTE;
+            req.content.rtm_family = static_cast<unsigned char>(af);
+            const size_t alen = af == AF_INET ? 4 : 16;
+            int err = nl_dump(req, [&](nlmsghdr* h) {
+                if (h->nlmsg_type != RTM_NEWROUTE)
+                    return;
+                auto* rt = static_cast<rtmsg*>(NLMSG_DATA(h));
+                if (rt->rtm_family != af or rt->rtm_dst_len != 0 or rt->rtm_type != RTN_UNICAST
+                    or rt->rtm_protocol == RTPROT_SROUTER or (rt->rtm_flags & (RTNH_F_DEAD | RTNH_F_LINKDOWN)))
+                    return;
+                uint32_t table = rt->rtm_table, metric = 0;
+                int oif = 0;
+                std::optional<std::array<uint8_t, 16>> gw;
+                auto read_gw = [alen](const rtattr* a) {
+                    std::array<uint8_t, 16> g{};
+                    if (RTA_PAYLOAD(a) >= alen)
+                        std::memcpy(g.data(), RTA_DATA(a), alen);
+                    return g;
+                };
+                const rtattr* multipath = nullptr;
+                int len = RTM_PAYLOAD(h);
+                for (auto* a = RTM_RTA(rt); RTA_OK(a, len); a = RTA_NEXT(a, len))
+                {
+                    switch (a->rta_type)
+                    {
+                        case RTA_TABLE:
+                            table = *static_cast<const uint32_t*>(RTA_DATA(a));
+                            break;
+                        case RTA_PRIORITY:
+                            metric = *static_cast<const uint32_t*>(RTA_DATA(a));
+                            break;
+                        case RTA_OIF:
+                            oif = *static_cast<const int*>(RTA_DATA(a));
+                            break;
+                        case RTA_GATEWAY:
+                            gw = read_gw(a);
+                            break;
+                        case RTA_MULTIPATH:
+                            multipath = a;
+                            break;
+                    }
+                }
+                if (table != RT_TABLE_MAIN)
+                    return;
+                if (not multipath)
+                {
+                    if (oif)
+                        hops.push_back({metric, oif, gw});
+                    return;
+                }
+                // ECMP: each next hop is an rtnexthop followed by its own attributes.
+                int mlen = RTA_PAYLOAD(multipath);
+                for (auto* nh = static_cast<const rtnexthop*>(RTA_DATA(multipath));
+                     mlen >= static_cast<int>(sizeof(rtnexthop)) and nh->rtnh_len >= sizeof(rtnexthop)
+                     and static_cast<int>(nh->rtnh_len) <= mlen;
+                     mlen -= RTNH_ALIGN(nh->rtnh_len), nh = RTNH_NEXT(nh))
+                {
+                    if (nh->rtnh_flags & (RTNH_F_DEAD | RTNH_F_LINKDOWN))
+                        continue;
+                    std::optional<std::array<uint8_t, 16>> nhgw;
+                    int alen_left = nh->rtnh_len - sizeof(rtnexthop);
+                    for (auto* a = RTNH_DATA(nh); RTA_OK(a, alen_left); a = RTA_NEXT(a, alen_left))
+                        if (a->rta_type == RTA_GATEWAY)
+                            nhgw = read_gw(a);
+                    hops.push_back({metric, nh->rtnh_ifindex, nhgw});
+                }
+            });
+            if (err)
+                log::warning(logcat, "Failed to list IPv{} routes: {}", af == AF_INET ? 4 : 6, strerror(err));
+            return hops;
+        }
+
+        // One of the interface's own addresses in the given family, preferring a global one, to
+        // stand in for the gateway of a gateway-less default route.
+        static std::optional<std::array<uint8_t, 16>> own_address(const std::string& ifname, int af)
+        {
+            ifaddrs* head;
+            if (getifaddrs(&head) != 0)
+                return std::nullopt;
+            call_on_destroy freer{[head] { freeifaddrs(head); }};
+            std::optional<std::array<uint8_t, 16>> found;
+            for (auto* ia = head; ia; ia = ia->ifa_next)
+            {
+                if (not ia->ifa_addr or ia->ifa_addr->sa_family != af or ifname != ia->ifa_name)
+                    continue;
+                std::array<uint8_t, 16> a{};
+                if (af == AF_INET)
+                {
+                    std::memcpy(a.data(), &reinterpret_cast<sockaddr_in*>(ia->ifa_addr)->sin_addr, 4);
+                    return a;
+                }
+                const auto& in6 = reinterpret_cast<sockaddr_in6*>(ia->ifa_addr)->sin6_addr;
+                std::memcpy(a.data(), &in6, 16);
+                if (not IN6_IS_ADDR_LINKLOCAL(&in6))
+                    return a;
+                if (not found)
+                    found = a;
+            }
+            return found;
         }
 
       public:
-        LinuxRouteManager() : fd{socket(AF_NETLINK, SOCK_DGRAM, NETLINK_ROUTE)}
+        LinuxRouteManager() : fd{socket(AF_NETLINK, SOCK_DGRAM | SOCK_CLOEXEC, NETLINK_ROUTE)}
         {
             if (fd == -1)
                 throw std::runtime_error{"netlink failed: {}"_format(strerror(errno))};
+            // The kernel always answers a request with NLM_F_ACK, but don't let a lost reply hang us.
+            timeval tv{.tv_sec = 2, .tv_usec = 0};
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         }
 
         ~LinuxRouteManager() override { close(fd); }
@@ -565,25 +916,54 @@ namespace srouter::vpn
             route_range_via_interface(RTM_DELROUTE, 0, vpn, range);
         }
 
+        // Returns the default gateways that can carry traffic now, IPv4 then IPv6, each lowest
+        // metric first (ties go to the lower interface index).  A default route only counts if
+        // its interface is up with a carrier and isn't the TUN, another VPN or overlay tunnel, or
+        // loopback; PPP and cellular links do count, with or without a gateway.  Routes the kernel
+        // marks dead or link-down, and our own, are skipped.
         std::vector<quic::Address> get_non_interface_gateways(NetworkInterface& vpn) override
         {
             const auto& ifname = vpn.interface_info().ifname;
-            std::vector<quic::Address> gateways{};
+            const auto links = dump_links();
 
-            std::ifstream inf{"/proc/net/route"};
-            for (std::string line; std::getline(inf, line);)
+            std::vector<quic::Address> gateways{};
+            gw_info4.clear();
+            gw_info6.clear();
+            for (int af : {AF_INET, AF_INET6})
             {
-                const auto parts = split(line, "\t");
-                if (parts[1].find_first_not_of('0') == std::string::npos and parts[0] != ifname)
+                auto hops = dump_default_hops(af);
+                std::ranges::stable_sort(hops, {}, [](const auto& h) { return std::pair{h.metric, h.ifindex}; });
+                for (const auto& hop : hops)
                 {
-                    const auto& ip = parts[2];
-                    if ((ip.size() == sizeof(uint32_t) * 2) and oxenc::is_hex(ip))
+                    auto it = links.find(hop.ifindex);
+                    if (it == links.end() or not it->second.usable or it->second.name == ifname)
+                        continue;
+                    bool device_only = not hop.gateway;
+                    auto addr = device_only ? own_address(it->second.name, af) : hop.gateway;
+                    if (not addr)
+                        continue;
+                    if (af == AF_INET)
                     {
-                        std::string buf;
-                        oxenc::from_hex(ip.begin(), ip.end(), buf.data());
-                        quic::Address addr{buf, 0};
-                        gateways.push_back(std::move(addr));
+                        in_addr a{};
+                        std::memcpy(&a, addr->data(), 4);
+                        ipv4 gw{a};
+                        if (gw == ipv4{} or not gw_info4.emplace(gw, gw_info{hop.ifindex, device_only}).second)
+                            continue;
+                        gateways.emplace_back(gw, 0);
                     }
+                    else
+                    {
+                        ipv6 gw{std::span<const uint8_t, 16>{addr->data(), 16}};
+                        if (gw == ipv6{} or not gw_info6.emplace(gw, gw_info{hop.ifindex, device_only}).second)
+                            continue;
+                        gateways.emplace_back(gw, 0);
+                    }
+                    log::debug(
+                        logcat,
+                        "Default route candidate: {} metric {}",
+                        device_only ? "dev {}"_format(it->second.name)
+                                    : "via {} dev {}"_format(gateways.back().host(), it->second.name),
+                        hop.metric);
                 }
             }
             return gateways;
@@ -591,7 +971,7 @@ namespace srouter::vpn
 
         void add_blackhole() override
         {
-            make_blackhole(RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, AF_INET);
+            make_blackhole(RTM_NEWROUTE, NLM_F_CREATE, AF_INET);
             make_blackhole(RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, AF_INET6);
         }
 
@@ -599,6 +979,52 @@ namespace srouter::vpn
         {
             make_blackhole(RTM_DELROUTE, 0, AF_INET);
             make_blackhole(RTM_DELROUTE, 0, AF_INET6);
+        }
+
+        // Removes every main-table route carrying our protocol number: the blackholes and
+        // first-hop host routes a run that was killed left behind.  (Routes via its TUN went
+        // away with the device.)  Another instance running with route poking on uses the same
+        // protocol number, so its routes would go too; that setup isn't supported.
+        void delete_stale_routes() override
+        {
+            std::vector<std::vector<char>> stale;
+            for (int af : {AF_INET, AF_INET6})
+            {
+                struct
+                {
+                    nlmsghdr header;
+                    rtmsg content;
+                } req{};
+                req.header.nlmsg_len = NLMSG_LENGTH(sizeof req.content);
+                req.header.nlmsg_type = RTM_GETROUTE;
+                req.content.rtm_family = static_cast<unsigned char>(af);
+                int err = nl_dump(req, [&stale](nlmsghdr* h) {
+                    auto* rt = static_cast<rtmsg*>(NLMSG_DATA(h));
+                    if (h->nlmsg_type == RTM_NEWROUTE and rt->rtm_protocol == RTPROT_SROUTER
+                        and rt->rtm_table == RT_TABLE_MAIN)
+                        stale.emplace_back(reinterpret_cast<char*>(h), reinterpret_cast<char*>(h) + h->nlmsg_len);
+                });
+                if (err)
+                    log::warning(logcat, "Failed to list IPv{} routes: {}", af == AF_INET ? 4 : 6, strerror(err));
+            }
+
+            int removed = 0;
+            for (auto& msg : stale)
+            {
+                NLRequest req{};
+                if (msg.size() > sizeof(req))
+                    continue;
+                std::memcpy(&req, msg.data(), msg.size());
+                req.header.nlmsg_type = RTM_DELROUTE;
+                req.header.nlmsg_flags = NLM_F_REQUEST;
+                req.header.nlmsg_pid = 0;
+                if (int err = submit(req); not benign(RTM_DELROUTE, err))
+                    log::warning(logcat, "Failed to remove a route left by an earlier run: {}", strerror(err));
+                else
+                    ++removed;
+            }
+            if (removed)
+                log::info(logcat, "Removed {} route(s) left behind by an earlier run", removed);
         }
     };
 
