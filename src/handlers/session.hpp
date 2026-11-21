@@ -276,6 +276,9 @@ namespace srouter
             // incoming requests to initiate a session
             bool validate(const NetworkAddress& remote, std::optional<std::string> maybe_auth = std::nullopt);
 
+            // Live MapExit/SwapExits token: apply into the in-memory map used by session init.
+            void set_auth_token(const NetworkAddress& remote, std::string token);
+
             std::optional<ipv4> map_session_v4(const session::Session& s);
             std::optional<ipv6> map_session_v6(const session::Session& s);
 

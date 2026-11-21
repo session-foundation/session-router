@@ -2,12 +2,21 @@
 
 #include "address/types.hpp"
 
+#include <chrono>
+#include <memory>
 #include <optional>
+#include <set>
+#include <string_view>
 #include <unordered_map>
 
 namespace srouter
 {
     class Router;
+
+    namespace handlers
+    {
+        class TunEndpoint;
+    }
 
     template <typename IP>
     concept IP46 = std::same_as<IP, ipv4> || std::same_as<IP, ipv6>;
@@ -15,7 +24,7 @@ namespace srouter
     class RoutePoker
     {
       public:
-        RoutePoker(Router& r);
+        RoutePoker(Router& r, handlers::TunEndpoint& tun);
         RoutePoker(const RoutePoker&) = delete;
         RoutePoker(RoutePoker&&) = delete;
         RoutePoker& operator=(const RoutePoker&) = delete;
@@ -23,6 +32,10 @@ namespace srouter
 
         template <IP46 IP>
         void add_route(const IP& ip);
+
+        /// Pins a first hop being dialled, re-checking the default gateway first when up.
+        template <IP46 IP>
+        void add_first_hop(const IP& ip);
 
         template <IP46 IP>
         void delete_route(const IP& ip)
@@ -36,20 +49,57 @@ namespace srouter
 
         ~RoutePoker();
 
-        /// explicitly put routes up
-        void put_up();
+        /// Brings the OS routes in line with the current exit mappings.  With no mappings everything
+        /// is taken down.  Otherwise first hops are pinned via the real gateway, each mapped range
+        /// is routed via the TUN, and a /0 mapping also installs the default route via the TUN
+        /// (plus the blackhole, if enabled).  Must be called on the router loop.
+        void update_exit_routes();
 
-        /// explicitly put routes down
+        /// Removes every route this poker installed.
         void put_down();
+
+        /// Called when the last edge connection goes.  Keeps the routes (fail closed) when
+        /// blackhole-routes is on, otherwise takes them down until the edges come back.
+        void edges_lost();
 
         /// set dns resolver
         /// pass in if we are using exit node mode right now  as a bool
         // void set_dns_mode(bool using_exit_mode) const;
+        // NOTE: without set_dns_mode the system resolver is left alone.  An on-link LAN resolver
+        // is still reached directly (its subnet route beats the routes via the TUN); any other
+        // resolver goes through the exit, which can't reach a private one.
 
         bool enabled() const { return _enabled; }
+        /// True while the exit routes are installed and there is a default gateway (outside the
+        /// TUN) for each address family that has first hops pinned.  When the gateway goes, the routes
+        /// stay in place and the first-hop pins come out; this reports false, with a reason, until
+        /// it is back.
+        bool is_up() const;
+        std::string_view routes_reason() const;
 
       private:
+        // Discovers the gateways and pins first-hop host routes; returns false (and stays down) if
+        // there is no gateway or nothing to pin.
+        bool put_up();
+
         void update();
+
+        void set_default_route(bool up);
+
+        // Tries update_exit_routes() again later, after routes couldn't be put up.
+        void schedule_retry();
+        static constexpr std::chrono::seconds RETRY_INTERVAL{5};
+        bool _retry_pending{false};
+
+        // While the routes are up, re-checks the default gateway every few seconds, so a link that
+        // goes away (or comes back) shows up in is_up() without waiting for the edges to time out.
+        void schedule_gateway_check();
+        static constexpr std::chrono::seconds GATEWAY_CHECK_INTERVAL{2};
+        bool _check_pending{false};
+        // Set by update() when a gateway reappears after none: the old pins were taken out, so
+        // they have to go back in even if the gateway is the same one as before.
+        bool _repin{false};
+        std::shared_ptr<bool> _alive = std::make_shared<bool>(true);
 
         void delete_all_routes();
 
@@ -98,12 +148,20 @@ namespace srouter
         }
 
         Router& _router;
+        handlers::TunEndpoint& _tun;
         bool _up{false};
         bool _enabled{false};
+        bool _default_up{false};
+        bool _blackhole_up{false};
+        const char* _down_reason{nullptr};
+        std::set<ipv4_range> _tun_routes4;
+        std::set<ipv6_range> _tun_routes6;
     };
 
     extern template void RoutePoker::add_route(const ipv4&);
     extern template void RoutePoker::add_route(const ipv6&);
+    extern template void RoutePoker::add_first_hop(const ipv4&);
+    extern template void RoutePoker::add_first_hop(const ipv6&);
     extern template void RoutePoker::enable_route(const ipv4& ip, const ipv4& gateway);
     extern template void RoutePoker::enable_route(const ipv6& ip, const ipv6& gateway);
     extern template void RoutePoker::disable_route(const ipv4& ip, const ipv4& gateway);

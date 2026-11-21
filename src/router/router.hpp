@@ -160,6 +160,9 @@ namespace srouter
         std::shared_ptr<dns::Listener> _dns;
         std::shared_ptr<vpn::Platform> _vpn;
         std::shared_ptr<RoutePoker> _route_poker;
+        std::function<void(const ipv4&)> _first_hop_poke_v4;
+        std::function<void(const ipv6&)> _first_hop_poke_v6;
+        std::function<void()> _exit_map_hook;
 
         std::promise<void> _close_promise;
 
@@ -267,6 +270,20 @@ namespace srouter
 
         const Config& config() const { return _config; }
 
+        // Exit mappings ([exit]:reserved-range, and MapExit and friends at runtime).  Only touch
+        // these on the router loop, and call exit_map_changed() after changing them.
+        auto& mutable_exit_ranges() { return _config.exit.ranges; }
+        const auto& exit_ranges() const { return _config.exit.ranges; }
+
+        // The TUN endpoint registers this to bring OS routes in line with the exit mappings.
+        void set_exit_map_hook(std::function<void()> f) { _exit_map_hook = std::move(f); }
+        void exit_map_changed()
+        {
+            assert(_loop->inside());
+            if (_exit_map_hook)
+                _exit_map_hook();
+        }
+
         ContactDB& contact_db()
         {
             assert(_contact_db);
@@ -329,6 +346,11 @@ namespace srouter
 
         // RoutePoker& route_poker() { return *_route_poker; }
         // const RoutePoker& route_poker() const { return *_route_poker; }
+
+        // Full platform (TunEndpoint) registers these so core link code can request a host
+        // route to a relay first hop without linking RoutePoker into session-router-core.
+        void set_first_hop_poker(std::function<void(const ipv4&)> v4, std::function<void(const ipv6&)> v6);
+        void poke_first_hop(const quic::Address& addr);
 
         std::string status_line();
 
