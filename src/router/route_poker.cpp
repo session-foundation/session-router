@@ -77,6 +77,11 @@ namespace srouter
             return;
         }
 
+        // A run that was killed with routes up leaves its blackhole and first-hop routes behind;
+        // the blackhole alone would keep the machine offline.
+        if (const auto& platform = _router.vpn_platform())
+            platform->RouteManager().delete_stale_routes();
+
         // TODO FIXME: this should be enabled again, but it doesn't seem very nice to have this on
         // such a tight timer.  Perhaps we could trigger it from the appropriate place, and if not,
         // at least reduce the timer frequency.
