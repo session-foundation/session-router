@@ -903,6 +903,7 @@ namespace srouter::link
                 {
                     log::warning(logcat, "Path control message returned an error!");
                     prev_message.respond(response.body(), response.is_error());
+                    return;
                 }
 
                 std::vector<std::byte> payload;
