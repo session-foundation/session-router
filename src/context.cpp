@@ -95,19 +95,9 @@ namespace srouter
 
     void Context::signal(int sig)
     {
-        if (router
-            && (sig == SIGINT || sig == SIGTERM
-#ifdef SIGKILL
-                || sig == SIGKILL
-#endif
-                ))
+        if (router && (sig == SIGINT || sig == SIGTERM))
         {
-            log::warning(
-                logcat,
-                "Received signal SIG{}; stopping router...",
-                sig == SIGINT        ? "INT"
-                    : sig == SIGTERM ? "TERM"
-                                     : "KILL");
+            log::warning(logcat, "Received signal SIG{}; stopping router...", sig == SIGINT ? "INT" : "TERM");
             stop();
         }
     }
