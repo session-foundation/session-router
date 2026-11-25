@@ -1,3 +1,9 @@
+session-router (1.1.1-3~deb14+1) forky; urgency=medium
+
+  * Rebuild against current forky libraries
+
+ -- Jason Rhinelander <jason@session.foundation>  Wed, 25 Nov 2026 19:37:53 -0400
+
 session-router (1.1.1-3~deb14) forky; urgency=medium
 
   * Move adduser dependency to session-router-bin
