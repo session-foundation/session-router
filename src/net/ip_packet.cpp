@@ -219,7 +219,7 @@ namespace srouter
         log::trace(logcat, "Setting new source ({}) and destination ({}) IPs", src, dst);
 
         auto& hdr = header();
-        if (auto ihs = size_t(hdr.header_len * 4), sz = size(); ihs <= sz)
+        if (auto ihs = hdr.header_size(), sz = size(); ihs <= sz)
         {
             auto* payload = data() + ihs;
             auto payload_size = sz - ihs;
@@ -347,7 +347,7 @@ namespace srouter
         if (is_ipv4())
         {
             const auto& header = this->header();
-            auto ip_hdr_sz = header.header_len * 4;
+            auto ip_hdr_sz = header.header_size();
 
             // ICMP unreachable includes a carbon copy of the illiciting packet prefix including *at
             // least* the header, but can also include some of the body: we also include the first
@@ -359,8 +359,7 @@ namespace srouter
             IPPacket pkt{pkt_size};
 
             auto& hdr = pkt.header();
-            hdr.version = 0x04;
-            hdr.header_len = 0x05;
+            hdr.version_ihl = 0x45;  // IPv4, 20-byte header with no options
             hdr.service_type = 0;
             hdr.checksum = 0;
             hdr.total_len = ntohs(pkt_size);
@@ -419,7 +418,7 @@ namespace srouter
             IPPacket pkt{sizeof(ipv6_header) + payload_size};
 
             auto& hdr = pkt.v6_header();
-            hdr.version = 0x06;
+            hdr.version(6);
             hdr.payload_len = oxenc::host_to_big(payload_size);
             hdr.protocol = 58;  // ICMPv6
             hdr.hoplimit = header.hoplimit;
@@ -461,7 +460,7 @@ namespace srouter
         data += sizeof(udp_header);
         std::memcpy(data, payload.data(), payload.size());
 
-        ip_hdr.version = 6;
+        ip_hdr.version(6);
         ip_hdr.payload_len = oxenc::host_to_big<uint16_t>(sizeof(udp_header) + payload.size());
         ip_hdr.protocol = static_cast<uint8_t>(net::IPProtocol::UDP);
         ip_hdr.hoplimit = 255;

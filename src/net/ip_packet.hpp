@@ -50,18 +50,15 @@ namespace srouter
         ipv6_header& v6_header() { return *reinterpret_cast<ipv6_header*>(data()); }
         const ipv6_header& v6_header() const { return *reinterpret_cast<const ipv6_header*>(data()); }
 
-        size_t header_size() const
-        {
-            return is_ipv4() ? static_cast<size_t>(header().header_len) * 4 : is_ipv6() ? 40 : 0;
-        }
+        size_t header_size() const { return is_ipv4() ? header().header_size() : is_ipv6() ? 40 : 0; }
         size_t payload_size() const
         {
             auto hsz = header_size();
             return hsz >= _buf.size() ? 0 : _buf.size() - hsz;
         }
 
-        bool is_ipv4() const { return _buf.size() >= sizeof(ip_header) && header().version == 4; }
-        bool is_ipv6() const { return _buf.size() >= sizeof(ipv6_header) && v6_header().version == 6; }
+        bool is_ipv4() const { return _buf.size() >= sizeof(ip_header) && header().version() == 4; }
+        bool is_ipv6() const { return _buf.size() >= sizeof(ipv6_header) && v6_header().version() == 6; }
         bool is_ip() const { return is_ipv4() || is_ipv6(); }
 
         net::IPProtocol protocol() const
