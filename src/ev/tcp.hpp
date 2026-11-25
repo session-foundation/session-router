@@ -5,7 +5,6 @@
 
 extern "C"
 {
-#include <arpa/inet.h>
     struct bufferevent;
     struct evconnlistener;
 }

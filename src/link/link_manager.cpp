@@ -4,7 +4,6 @@
 #include "contact/contactdb.hpp"
 #include "contact/router_id.hpp"
 #include "crypto/crypto.hpp"
-#include "messages/common.hpp"
 #include "nodedb.hpp"
 #include "path/path.hpp"
 #include "path/transit_hop.hpp"
@@ -37,6 +36,13 @@
 namespace srouter::link
 {
     static auto logcat = srouter::log::Cat("link.manager");
+
+    static std::string status_response(std::string_view status)
+    {
+        oxenc::bt_dict_producer p;
+        p.append("!", status);
+        return std::move(p).str();
+    }
 
     using session::session_tag;
 
@@ -313,7 +319,7 @@ namespace srouter::link
         catch (const std::exception& e)
         {
             log::warning(logcat, "Exception handling RC Fetch request: {}", e.what());
-            respond(messages::ERROR_RESPONSE);
+            respond(status_response("ERROR"));
         }
     }
 
@@ -359,7 +365,7 @@ namespace srouter::link
         catch (const std::exception& e)
         {
             log::warning(logcat, "Exception: {}", e.what());
-            return respond(messages::ERROR_RESPONSE);
+            return respond(status_response("ERROR"));
         }
 
         router.oxend()->lookup_sns_hash(
@@ -376,7 +382,7 @@ namespace srouter::link
                 else
                 {
                     log::debug(logcat, "SNS registration not found");
-                    respond(messages::NOT_FOUND_RESPONSE);
+                    respond(status_response("NOT FOUND"));
                 }
             });
     }
@@ -408,19 +414,19 @@ namespace srouter::link
         {
             log::warning(logcat, "Invalid publish CC request: {}", e.what());
             log::debug(logcat, "Invalid encrypted CC body: {}", buffer_printer{body});
-            return respond(messages::ERROR_RESPONSE);
+            return respond(status_response("ERROR"));
         }
 
         auto now = time_now_ms();
         if (signed_at < now - path::MAX_LIFETIME_ACCEPTED)
         {
             log::debug(logcat, "Refusing expired (signed {} ago) encrypted CC", now - signed_at);
-            return respond(messages::EXPIRED_RESPONSE);
+            return respond(status_response("SLOW CLOCK"));
         }
         if (signed_at > now + 10min)
         {
             log::debug(logcat, "Refusing too far in future ({}) encrypted CC", signed_at - now);
-            return respond(messages::FUTURE_RESPONSE);
+            return respond(status_response("FAST CLOCK"));
         }
 
         if (not router.is_service_node)
@@ -445,7 +451,7 @@ namespace srouter::link
         auto closest_rids = router.node_db().find_many_closest_to(blinded_pk, path::CC_PUBLISH_LOCATIONS + 1);
         if (closest_rids.size() < path::CC_PUBLISH_LOCATIONS)
         {
-            respond(messages::serialize_status_response("No RCs available!"));
+            respond(status_response("No RCs available!"));
             return;
         }
 
@@ -453,12 +459,12 @@ namespace srouter::link
             try
             {
                 router.contact_db().put_cc(std::string{enc_cc});
-                respond(messages::OK_RESPONSE);
+                respond(status_response("OK"));
             }
             catch (const std::exception& e)
             {
                 log::warning(logcat, "ECC publish to {} provided an invalid CC: {}", blinded_pk, e.what());
-                respond(messages::ERROR_RESPONSE);
+                respond(status_response("ERROR"));
             }
         };
 
@@ -470,8 +476,7 @@ namespace srouter::link
                     logcat,
                     "Ignoring ECC publish from a client with {} publish index",
                     location ? "invalid ({})"_format(location) : "missing");
-                respond(messages::serialize_status_response(
-                    location ? "INVALID PUBLISH LOCATION" : "MISSING PUBLISH LOCATION"));
+                respond(status_response(location ? "INVALID PUBLISH LOCATION" : "MISSING PUBLISH LOCATION"));
                 return;
             }
 
@@ -518,7 +523,7 @@ namespace srouter::link
 
         log::warning(
             logcat, "Ignoring forwarded CC publish: we are not in the top {} publish locations", closest_rids.size());
-        respond(messages::ERROR_RESPONSE);
+        respond(status_response("ERROR"));
         return;
     }
 
@@ -544,7 +549,7 @@ namespace srouter::link
         catch (const std::exception& e)
         {
             log::warning(logcat, "Exception: {}", e.what());
-            return respond(messages::ERROR_RESPONSE);
+            return respond(status_response("ERROR"));
         }
 
         auto respond_if_local_cc = [&]() -> bool {
@@ -552,7 +557,7 @@ namespace srouter::link
             {
                 log::debug(logcat, "find_cc request (key: {}): found and returning local encrypted CC", blinded_pubkey);
                 oxenc::bt_dict_producer btdp;
-                btdp.append("!"sv, messages::STATUS_OK);
+                btdp.append("!"sv, "OK"sv);
                 btdp.append("x"sv, *maybe_cc);
                 // FIXME: eventually respond func should take a byte span or something, but
                 //        string was easier for now
@@ -565,7 +570,7 @@ namespace srouter::link
             if (!respond_if_local_cc())
             {
                 log::debug(logcat, "find_cc request (key: {}): record not found; returning error", blinded_pubkey);
-                respond(messages::NOT_FOUND_RESPONSE);
+                respond(status_response("NOT FOUND"));
             }
         };
 
@@ -582,7 +587,7 @@ namespace srouter::link
 
         auto closest_rids = router.node_db().find_many_closest_to(blinded_pubkey, path::CC_PUBLISH_LOCATIONS);
         if (closest_rids.size() < path::CC_PUBLISH_LOCATIONS)
-            return respond(messages::ERROR_RESPONSE);
+            return respond(status_response("ERROR"));
 
         std::vector<std::byte> relay_find_cc;
         {
@@ -604,7 +609,7 @@ namespace srouter::link
 
             endpoint.send_command(lookup_rid, "find_cc", std::move(relay_find_cc), [respond](quic::message msg) {
                 if (msg.timed_out)
-                    respond(messages::TIMEOUT_RESPONSE);
+                    respond(status_response("TIMEOUT"));
                 else
                     respond(std::string{msg.body()});
             });
@@ -644,7 +649,7 @@ namespace srouter::link
                     return;  // This was an error, but there are more responses to come back
 
                 log::warning(logcat, "All find_cc requests FAILED! Relaying failure");
-                respond(msg.timed_out ? messages::TIMEOUT_RESPONSE : std::string{msg.body()});
+                respond(msg.timed_out ? status_response("TIMEOUT") : std::string{msg.body()});
             };
 
             log::debug(logcat, "Relaying find_ccMessage (key: {}) to {} peers", blinded_pubkey, *remaining);
@@ -668,7 +673,7 @@ namespace srouter::link
         if (not router.is_service_node)
         {
             log::warning(logcat, "got path build request when not relay node!");
-            return m.respond(messages::ERROR_RESPONSE, true);
+            return m.respond(status_response("ERROR"), true);
         }
 
         try
@@ -686,7 +691,7 @@ namespace srouter::link
                     path::BUILD_LENGTH,
                     path::BUILD_FRAME_SIZE_MIN,
                     path::BUILD_FRAME_SIZE_MAX);
-                m.respond(messages::serialize_status_response("BAD FRAMES"sv), true);
+                m.respond(status_response("BAD FRAMES"), true);
                 return;
             }
 
@@ -705,7 +710,7 @@ namespace srouter::link
             {
                 log::info(logcat, "We are the terminal hop; path build succeeded");
                 router.path_context.put_transit_hop(std::move(hop));
-                return m.respond(messages::OK_RESPONSE);
+                return m.respond(status_response("OK"));
             }
 
             // rotate remaining frames forward
@@ -749,7 +754,7 @@ namespace srouter::link
                             "relaying",
                             *hop);
                         router.path_context.put_transit_hop(std::move(hop));
-                        prev_message.respond(messages::OK_RESPONSE);
+                        prev_message.respond(status_response("OK"));
                         return;
                     }
 
@@ -764,7 +769,7 @@ namespace srouter::link
         catch (const path::TransitHopError& e)
         {
             log::warning(logcat, "An error occurred during path build request handling: {}", e.what());
-            return m.respond(messages::serialize_status_response(e.error_code), true);
+            return m.respond(status_response(e.error_code), true);
         }
     }
 
@@ -776,7 +781,7 @@ namespace srouter::link
         if (body.size() <= path::Path::ENCRYPT_PATH_MESSAGE_OVERHEAD_MAC)
         {
             log::warning(logcat, "Received path control message too small to contain valid data.");
-            m.respond(messages::ERROR_RESPONSE, true);
+            m.respond(status_response("ERROR"), true);
             return;
         }
 
@@ -794,7 +799,7 @@ namespace srouter::link
         {
             log::warning(logcat, "Invalid/unknown path_control encrypted message type {}", static_cast<int>(type));
             log::trace(logcat, "Failed path_control payload: {}", buffer_printer{body});
-            m.respond(messages::ERROR_RESPONSE, true);
+            m.respond(status_response("ERROR"), true);
             return;
         }
         nonce.assign(bnonce);
@@ -804,7 +809,7 @@ namespace srouter::link
         if (not hop)
         {
             log::warning(logcat, "Received path control for unknown path (hop ID: {})", hop_id);
-            m.respond(messages::ERROR_RESPONSE, true);
+            m.respond(status_response("ERROR"), true);
             return;
         }
 
@@ -898,6 +903,7 @@ namespace srouter::link
                 {
                     log::warning(logcat, "Path control message returned an error!");
                     prev_message.respond(response.body(), response.is_error());
+                    return;
                 }
 
                 std::vector<std::byte> payload;
@@ -906,7 +912,7 @@ namespace srouter::link
 
                 if (body.size() <= path::Path::ENCRYPT_PATH_MESSAGE_OVERHEAD)
                 {
-                    prev_message.respond(messages::ERROR_RESPONSE, true);
+                    prev_message.respond(status_response("ERROR"), true);
                     return;
                 }
 
@@ -919,7 +925,7 @@ namespace srouter::link
                         "Path control message response type byte mismatch!  Expected {}, got {}",
                         static_cast<int>(type),
                         static_cast<int>(msgtype[0]));
-                    prev_message.respond(messages::ERROR_RESPONSE, true);
+                    prev_message.respond(status_response("ERROR"), true);
                     return;
                 }
                 HopID recv_hopid;
@@ -929,7 +935,7 @@ namespace srouter::link
                 if (recv_hopid != hop->txid)
                 {
                     log::warning(logcat, "Path control message response type unexpected hop id...");
-                    prev_message.respond(messages::ERROR_RESPONSE, true);
+                    prev_message.respond(status_response("ERROR"), true);
                     return;
                 }
 
@@ -1397,7 +1403,7 @@ namespace srouter::link
         catch (const std::exception& e)
         {
             log::warning(logcat, "Exception: {}; Payload: {}", e.what(), buffer_printer{payload});
-            return respond(messages::serialize_status_response("ERROR"));
+            return respond(status_response("ERROR"));
         }
 
         if (auto it = path_requests.find(endpoint); it != path_requests.end())
@@ -1412,7 +1418,7 @@ namespace srouter::link
     void Manager::handle_path_ping(std::span<const std::byte>, std::function<void(std::string)> respond)
     {
         log::trace(logcat, "{} called", __PRETTY_FUNCTION__);
-        respond(messages::OK_RESPONSE);
+        respond(status_response("OK"));
     }
 
     void Manager::handle_path_latency(quic::message m)
@@ -1424,7 +1430,7 @@ namespace srouter::link
         catch (const std::exception& e)
         {
             log::warning(logcat, "Exception: {}", e.what());
-            return m.respond(messages::ERROR_RESPONSE, true);
+            return m.respond(status_response("ERROR"), true);
         }
     }
 

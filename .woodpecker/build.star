@@ -122,7 +122,7 @@ def linux(
         })
     return workflow(name, arch, steps)
 
-def clang(version):
+def clang(version, distro = "Debian sid", image = "debian-sid-clang"):
     cmake = {
         "CMAKE_C_COMPILER": "clang-%d" % version,
         "CMAKE_CXX_COMPILER": "clang++-%d" % version,
@@ -134,13 +134,13 @@ def clang(version):
         # clang-21 breaks lots of things in fmt 10, so we have to avoid it.
         cmake.update(FORCE_OXENLOGGING_SUBMODULE = True, OXEN_LOGGING_FORCE_SUBMODULES = True)
     return linux(
-        "Debian sid: clang-%d" % version,
-        "debian-sid-clang",
+        "%s: clang-%d" % (distro, version),
+        image,
         deps = deps_with(add = ["clang-%d" % version, "llvm-%d" % version], remove = ["g++"]),
         cmake = cmake,
     )
 
-def full_llvm(version):
+def full_llvm(version, distro = "Debian sid", image = "debian-sid-clang"):
     cmake = {
         "CMAKE_C_COMPILER": "clang-%d" % version,
         "CMAKE_CXX_COMPILER": "clang++-%d" % version,
@@ -154,8 +154,8 @@ def full_llvm(version):
     for kind in ["EXE", "MODULE", "SHARED"]:
         cmake["CMAKE_%s_LINKER_FLAGS" % kind] = "-fuse-ld=lld-%d" % version
     return linux(
-        "Debian sid: llvm-%d" % version,
-        "debian-sid-clang",
+        "%s: llvm-%d" % (distro, version),
+        image,
         deps = deps_with(
             add = [
                 "clang-%d" % version,
@@ -223,10 +223,8 @@ def main(ctx):
         linux("Debian sid: debug", "debian-sid", cmake = {"CMAKE_BUILD_TYPE": "Debug"}),
         linux("Debian sid: debug [arm64]", "debian-sid", arch = "arm64", jobs = 4, cmake = {"CMAKE_BUILD_TYPE": "Debug"}),
 
-        clang(19),
-        full_llvm(19),
-        clang(21),
-        full_llvm(21),
+        clang(23),
+        full_llvm(23),
 
         linux("Debian testing", "debian-forky"),
         linux("Debian testing [i386]", "debian-forky/i386"),
@@ -235,6 +233,9 @@ def main(ctx):
 
         linux("Debian 13: trixie", "debian-trixie"),
         linux("Debian 13: trixie [arm64]", "debian-trixie", arch = "arm64", jobs = 4),
+
+        clang(19, "Debian 13", "debian-trixie"),
+        full_llvm(19, "Debian 13", "debian-trixie"),
 
         linux("Debian 12: bookworm", "debian-bookworm"),
         linux(
@@ -267,6 +268,25 @@ def main(ctx):
             "ubuntu-jammy",
             "linux-amd64",
             lto = True,
+        ),
+
+        # The embedded core only, as libsession builds it for Windows.
+        linux(
+            "Static Windows x64: core",
+            "debian-win32-cross",
+            deps = static_deps + ["g++-mingw-w64-x86-64-posix"],
+            session_repo = False,
+            cmake = {
+                "CMAKE_TOOLCHAIN_FILE": "../contrib/cross/mingw64.cmake",
+                "TOOLCHAIN_SUFFIX": "-posix",
+                "BUILD_STATIC_DEPS": True,
+                "SROUTER_FULL": False,
+                "SROUTER_DAEMON": False,
+                "SROUTER_NATIVE_BUILD": False,
+                "SROUTER_JEMALLOC": False,
+                "SROUTER_WARNINGS_AS_ERRORS": True,
+                "WITH_SYSTEMD": False,
+            },
         ),
 
         linux("Ubuntu latest", "ubuntu-rolling"),

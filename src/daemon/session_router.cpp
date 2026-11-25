@@ -474,7 +474,6 @@ namespace
 
             signal(SIGINT, handle_signal);
             signal(SIGTERM, handle_signal);
-            signal(SIGKILL, handle_signal);
         }
         catch (srouter::util::bind_socket_error& ex)
         {

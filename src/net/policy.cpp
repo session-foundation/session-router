@@ -6,10 +6,14 @@
 
 #include <stdexcept>
 
+#ifdef _WIN32
+#include <winsock2.h>
+#else
 extern "C"
 {
 #include <netdb.h>
 }
+#endif
 
 namespace srouter
 {

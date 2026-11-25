@@ -4,7 +4,6 @@
 #include "crypto/crypto.hpp"
 #include "crypto/session_keys.hpp"
 #include "link/link_manager.hpp"
-#include "messages/common.hpp"
 #include "nodedb.hpp"
 #include "path.hpp"
 #include "path_context.hpp"
@@ -845,7 +844,7 @@ namespace srouter::path
                     try
                     {
                         oxenc::bt_dict_consumer d{m.body()};
-                        auto status = d.require<std::string_view>(messages::STATUS_KEY);
+                        auto status = d.require<std::string_view>("!");
                         log::warning(logcat, "Onepass path-build returned failure status: {}", status);
                     }
                     catch (const std::exception& e)

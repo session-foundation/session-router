@@ -65,7 +65,7 @@ namespace srouter
                 into.reset();
                 return;
             }
-            size_t size;
+            size_t size = 0;
             auto [end, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), size);
             auto unit = lowercase_ascii_string(std::string{end, arg.data() + arg.size()});
             size_t multiplier = 0;
