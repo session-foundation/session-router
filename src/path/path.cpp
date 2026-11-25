@@ -20,6 +20,22 @@ namespace srouter::path
 {
     static auto logcat = log::Cat("path");
 
+    static bool has_ok_status(std::string_view body)
+    {
+        try
+        {
+            oxenc::bt_dict_consumer d{body};
+            auto status = d.maybe<std::string_view>("!"sv);
+            // Without this, a truncated or trailing-garbage body would pass once "!" has been read.
+            d.finish();
+            return status == "OK"sv;
+        }
+        catch (const std::exception&)
+        {
+            return false;
+        }
+    }
+
     size_t Path::next_path_log_id = 0;
 
     Path::Path(Router& rtr, std::span<const RelayContact> hop_rcs, sys_ms expiry_ts)
@@ -94,7 +110,9 @@ namespace srouter::path
                     return;
                 auto now = steady_now_ms();
                 auto time_taken = now - start_time;
-                if (resp.ok())
+                // A reply that fails decryption (e.g. one not from the terminal hop) arrives transport-ok
+                // with an empty body, so only the expected status proves the path works.
+                if (resp.ok() && has_ok_status(resp.body))
                 {
                     if (++ping_responses > 1)
                         ping_abs_diffs += time_taken >= ping_last ? time_taken - ping_last : ping_last - time_taken;
@@ -102,35 +120,13 @@ namespace srouter::path
                     ping_recent_timeouts = 0;
                     ping_cumulative += time_taken;
 
-                    bool status_ok = [&body = resp.body] {
-                        try
-                        {
-                            oxenc::bt_dict_consumer d{body};
-                            auto status = d.maybe<std::string_view>("!"sv);
-                            d.finish();
-                            return status == "OK"sv;
-                        }
-                        catch (const std::exception&)
-                        {
-                            return false;
-                        }
-                    }();
-
-                    if (status_ok)
-                        log::debug(
-                            logcat,
-                            "Ping response for path {} (txid={}) response received in {} ({})",
-                            *this,
-                            edge().txid,
-                            time_taken,
-                            printable_ping_stats());
-                    else
-                        log::warning(
-                            logcat,
-                            "Path {} ping was successful (in {}) but had unexpected response body: {}",
-                            *this,
-                            time_taken,
-                            buffer_printer(resp.body));
+                    log::debug(
+                        logcat,
+                        "Ping response for path {} (txid={}) response received in {} ({})",
+                        *this,
+                        edge().txid,
+                        time_taken,
+                        printable_ping_stats());
                 }
                 else
                 {
@@ -154,10 +150,17 @@ namespace srouter::path
                                 edge().txid,
                                 ping_recent_timeouts);
                     }
-                    else
+                    else if (resp.error)
                         log::warning(
                             logcat,
                             "{} path_ping returned a path error (in {}): {}",
+                            *this,
+                            time_taken,
+                            buffer_printer(resp.body));
+                    else
+                        log::warning(
+                            logcat,
+                            "Path {} returned an unexpected ping reply (in {}); expiring path: {}",
                             *this,
                             time_taken,
                             buffer_printer(resp.body));
