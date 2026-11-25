@@ -6,7 +6,6 @@
 #include "crypto/crypto.hpp"
 #include "handlers/tun.hpp"
 #include "link/endpoint.hpp"
-#include "messages/common.hpp"
 #include "nodedb.hpp"
 #include "path/path.hpp"
 #include "path/transit_hop.hpp"
@@ -652,10 +651,9 @@ namespace srouter::handlers
                     log::debug(logcat, "Call to ResolveSNS succeeded!");
 
                     oxenc::bt_dict_consumer sns{resp.body};
-                    if (auto err = sns.maybe<std::string_view>(messages::STATUS_KEY);
-                        err && *err != messages::STATUS_OK)
+                    if (auto err = sns.maybe<std::string_view>("!"); err && *err != "OK")
                     {
-                        if (*err == messages::STATUS_NOT_FOUND)
+                        if (*err == "NOT FOUND")
                         {
                             log::debug(logcat, "Relay returned CC not found");
                             sns_results->not_found_count++;
@@ -889,11 +887,10 @@ namespace srouter::handlers
                 {
                     oxenc::bt_dict_consumer cc_dict{resp.body};
                     bool failed = false;
-                    if (auto err = cc_dict.maybe<std::string_view>(messages::STATUS_KEY);
-                        err && *err != messages::STATUS_OK)
+                    if (auto err = cc_dict.maybe<std::string_view>("!"); err && *err != "OK")
                     {
                         failed = true;
-                        if (*err == messages::STATUS_NOT_FOUND)
+                        if (*err == "NOT FOUND")
                         {
                             log::debug(logcat, "Relay returned CC not found");
                         }
@@ -911,7 +908,7 @@ namespace srouter::handlers
                 else
                 {
                     oxenc::bt_dict_consumer btdc{resp.body};
-                    auto status = btdc.maybe<std::string>(messages::STATUS_KEY);
+                    auto status = btdc.maybe<std::string>("!");
 
                     log::warning(
                         logcat, "Call to FindClientContact FAILED; reason: {}", status.value_or("<none given>"));

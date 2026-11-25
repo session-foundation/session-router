@@ -2,7 +2,6 @@
 
 #include "crypto/crypto.hpp"
 #include "link/endpoint.hpp"
-#include "messages/common.hpp"
 #include "nodedb.hpp"
 #include "path_handler.hpp"
 #include "profiling.hpp"
@@ -12,6 +11,7 @@
 
 #include <nlohmann/json.hpp>
 #include <oxenc/bt_producer.h>
+#include <oxenc/bt_serialize.h>
 
 #include <chrono>
 #include <ranges>
@@ -102,7 +102,21 @@ namespace srouter::path
                     ping_recent_timeouts = 0;
                     ping_cumulative += time_taken;
 
-                    if (resp.body == messages::OK_RESPONSE)
+                    bool status_ok = [&body = resp.body] {
+                        try
+                        {
+                            oxenc::bt_dict_consumer d{body};
+                            auto status = d.maybe<std::string_view>("!"sv);
+                            d.finish();
+                            return status == "OK"sv;
+                        }
+                        catch (const std::exception&)
+                        {
+                            return false;
+                        }
+                    }();
+
+                    if (status_ok)
                         log::debug(
                             logcat,
                             "Ping response for path {} (txid={}) response received in {} ({})",

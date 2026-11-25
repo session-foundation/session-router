@@ -55,8 +55,6 @@ endif()
 # needed by vpn/ router/ rpc/ handlers/ net/ link/
 session_router_add_library(session-router-core-utils
   handlers/session.cpp
-
-  messages/common.cpp
 )
 
 session_router_add_library(session-router-core
