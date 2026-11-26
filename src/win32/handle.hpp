@@ -1,6 +1,8 @@
 #pragma once
 
-#include "exception.hpp"
+#include <windows.h>
+
+#include <system_error>
 
 namespace srouter::win32
 {
@@ -12,7 +14,7 @@ namespace srouter::win32
         if (auto err = GetLastError())
         {
             SetLastError(0);
-            throw srouter::win32::error{err, "handle validity check failed"};
+            throw std::system_error(static_cast<int>(err), std::system_category(), "handle validity check failed");
         }
     }
 }  // namespace srouter::win32

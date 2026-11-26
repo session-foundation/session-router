@@ -1,9 +1,11 @@
 #include "exec.hpp"
 
-#include "exception.hpp"
 #include "util/logging.hpp"
 
+#include <windows.h>
+
 #include <array>
+#include <system_error>
 
 namespace srouter::win32
 {
@@ -31,7 +33,8 @@ namespace srouter::win32
     {
         log::info(logcat, "exec: {}", cmd);
         if (not CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, false, 0, nullptr, nullptr, &_si, &_pi))
-            throw win32::error(GetLastError(), "failed to execute subprocess");
+            throw std::system_error(
+                static_cast<int>(GetLastError()), std::system_category(), "failed to execute subprocess");
     }
 
     OneShotExec::~OneShotExec()

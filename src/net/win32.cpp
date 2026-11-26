@@ -3,7 +3,8 @@
 #include "platform.hpp"
 #include "util/logging.hpp"
 #include "util/str.hpp"
-#include "win32/exception.hpp"
+
+#include <windows.h>
 
 #include <iphlpapi.h>
 

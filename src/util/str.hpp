@@ -77,7 +77,4 @@ namespace srouter
 
     std::string_view TrimWhitespace(std::string_view str);
 
-    /// convert a "normal" string into a wide string
-    std::wstring to_wide(std::string data);
-
 }  // namespace srouter
