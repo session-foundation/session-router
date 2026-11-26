@@ -47,7 +47,8 @@ namespace srouter
     inline constexpr size_t MAX_0RTT_TICKETS = 2;
 
     // A mundane RC update (new timestamp and signature only) is written over the stored copy only once
-    // that copy is this old; a restart re-fetches RCs, so disk only needs one well within OUTDATED_AGE.
+    // that copy is this old.  After a restart, peers' RC pushes (every RC_UPDATE_INTERVAL) replace the
+    // loaded copies; until then one older than OUTDATED_AGE fails local reachability testing.
     inline constexpr auto RC_DISK_REFRESH_AGE{6h};
 
     inline const std::filesystem::path RC_FILE_EXT{".signed"};
