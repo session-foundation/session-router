@@ -1,8 +1,9 @@
 #pragma once
-#include "exception.hpp"
 #include "util/str.hpp"
 
 #include <windows.h>
+
+#include <system_error>
 
 namespace srouter::win32
 {
@@ -17,7 +18,10 @@ namespace srouter::win32
             if (auto ptr = GetProcAddress(handle, name.c_str()))
                 f = reinterpret_cast<Func*>(ptr);
             else
-                throw win32::error{fmt::format("function '{}' not found", name)};
+                throw std::system_error(
+                    static_cast<int>(GetLastError()),
+                    std::system_category(),
+                    fmt::format("function '{}' not found", name));
             if constexpr (sizeof...(More) > 0)
                 load_funcs(handle, std::forward<More>(more)...);
         }

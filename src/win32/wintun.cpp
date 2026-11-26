@@ -4,11 +4,9 @@ extern "C"
 }
 
 #include "dll.hpp"
-#include "exception.hpp"
 #include "guid.hpp"
 #include "router/router.hpp"
 #include "util/logging.hpp"
-#include "util/str.hpp"
 #include "util/thread/queue.hpp"
 #include "vpn/platform.hpp"
 #include "wintun.hpp"
@@ -16,6 +14,7 @@ extern "C"
 #include <iphlpapi.h>
 
 #include <map>
+#include <system_error>
 #include <unordered_set>
 
 namespace srouter::win32
@@ -23,7 +22,10 @@ namespace srouter::win32
     namespace
     {
         static auto logcat = log::Cat("wintun");
+        // Wintun takes the pool name as UTF-16, but it also goes into each adapter's deterministic GUID
+        // as UTF-8, which has to stay the same for an existing install to find its adapter again.
         constexpr auto PoolName = "session-router";
+        constexpr auto PoolNameW = L"session-router";
 
         WINTUN_CREATE_ADAPTER_FUNC* create_adapter = nullptr;
         WINTUN_CLOSE_ADAPTER_FUNC* close_adapter = nullptr;
@@ -85,9 +87,25 @@ namespace srouter::win32
         };
 
         /// autovivify a wintun adapter handle
-        [[nodiscard]] auto make_adapter(std::string adapter_name, std::string tunnel_name)
+        [[nodiscard]] auto make_adapter(const std::string& adapter_name)
         {
-            auto adapter_name_wide = to_wide(adapter_name);
+            // Wintun takes the adapter name as UTF-16, which never needs more code units than the
+            // UTF-8 has bytes.
+            std::wstring adapter_name_wide(adapter_name.size(), L'\0');
+            const int wide_len = MultiByteToWideChar(
+                CP_UTF8,
+                0,
+                adapter_name.data(),
+                static_cast<int>(adapter_name.size()),
+                adapter_name_wide.data(),
+                static_cast<int>(adapter_name_wide.size()));
+            if (wide_len == 0)
+                throw std::system_error(
+                    static_cast<int>(GetLastError()),
+                    std::system_category(),
+                    fmt::format("invalid wintun adapter name '{}'", adapter_name));
+            adapter_name_wide.resize(wide_len);
+
             if (auto _impl = open_adapter(adapter_name_wide.c_str()))
             {
                 log::info(logcat, "opened existing adapter: '{}'", adapter_name);
@@ -95,22 +113,29 @@ namespace srouter::win32
             }
             if (auto err = GetLastError())
             {
-                log::info(logcat, "did not open existing adapter '{}': {}", adapter_name, error_to_string(err));
+                log::info(
+                    logcat,
+                    "did not open existing adapter '{}': {}",
+                    adapter_name,
+                    std::system_category().message(static_cast<int>(err)));
                 SetLastError(0);
             }
-            const auto guid = srouter::win32::MakeDeterministicGUID(fmt::format("{}|{}", adapter_name, tunnel_name));
-            log::info(logcat, "creating adapter: '{}' on pool '{}'", adapter_name, tunnel_name);
-            auto tunnel_name_wide = to_wide(tunnel_name);
-            if (auto _impl = create_adapter(adapter_name_wide.c_str(), tunnel_name_wide.c_str(), &guid))
+            const auto guid = srouter::win32::MakeDeterministicGUID(fmt::format("{}|{}", adapter_name, PoolName));
+            log::info(logcat, "creating adapter: '{}' on pool '{}'", adapter_name, PoolName);
+            if (auto _impl = create_adapter(adapter_name_wide.c_str(), PoolNameW, &guid))
             {
                 if (auto v = get_version())
                     log::info(logcat, "created adapter (wintun v{}.{})", (v >> 16) & 0xff, v & 0xff);
                 else
-                    log::warning(logcat, "failed to query wintun driver version: {}!", error_to_string(GetLastError()));
+                    log::warning(
+                        logcat,
+                        "failed to query wintun driver version: {}!",
+                        std::system_category().message(static_cast<int>(GetLastError())));
                 return _impl;
             }
 
-            throw win32::error{"failed to create wintun adapter"};
+            throw std::system_error(
+                static_cast<int>(GetLastError()), std::system_category(), "failed to create wintun adapter");
         }
 
         class WintunAdapter
@@ -127,7 +152,7 @@ namespace srouter::win32
           public:
             explicit WintunAdapter(std::string name)
             {
-                _handle = make_adapter(std::move(name), PoolName);
+                _handle = make_adapter(name);
                 if (_handle == nullptr)
                     throw std::runtime_error{"failed to create wintun adapter"};
             }
@@ -151,7 +176,10 @@ namespace srouter::win32
                     AddressRow.DadState = IpDadStatePreferred;
 
                     if (auto err = CreateUnicastIpAddressEntry(&AddressRow); err != ERROR_SUCCESS)
-                        throw win32::error{err, fmt::format("cannot set address '{}'", addr.range)};
+                        throw std::system_error(
+                            static_cast<int>(err),
+                            std::system_category(),
+                            fmt::format("cannot set address '{}'", addr.range));
 
                     log::debug(logcat, "Added address: {}", addr.range);
                 }
@@ -168,7 +196,8 @@ namespace srouter::win32
                         logcat,
                         fmt::format("wintun version {}.{} loaded", (wintun_ver >> 16) & 0xff, wintun_ver & 0xff));
                 else
-                    throw win32::error{"Failed to load wintun"};
+                    throw std::system_error(
+                        static_cast<int>(GetLastError()), std::system_category(), "Failed to load wintun");
                 if (auto impl = start_session(_handle, WINTUN_MAX_RING_CAPACITY))
                 {
                     if (auto handle = get_adapter_handle(impl))
@@ -197,7 +226,8 @@ namespace srouter::win32
                     _handle = handle;
                     return;
                 }
-                throw error{GetLastError(), "could not create wintun session"};
+                throw std::system_error(
+                    static_cast<int>(GetLastError()), std::system_category(), "could not create wintun session");
             }
 
             void Stop()
@@ -223,7 +253,7 @@ namespace srouter::win32
                     SetLastError(0);
                     return {nullptr, err == ERROR_HANDLE_EOF};
                 }
-                throw error{err, "failed to read packet"};
+                throw std::system_error(static_cast<int>(err), std::system_category(), "failed to read packet");
             }
 
             /// write an ip packet to the interface, return 2 bools, first is did we write the
@@ -242,7 +272,7 @@ namespace srouter::win32
                     SetLastError(0);
                     return {err != ERROR_BUFFER_OVERFLOW, err == ERROR_HANDLE_EOF};
                 }
-                throw error{err, "failed to write packet"};
+                throw std::system_error(static_cast<int>(err), std::system_category(), "failed to write packet");
             }
         };
 

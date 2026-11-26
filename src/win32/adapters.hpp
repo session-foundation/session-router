@@ -1,9 +1,11 @@
 #pragma once
-#include "win32/exception.hpp"
+#include <windows.h>
 
 #include <iphlpapi.h>
 
 #include <concepts>
+#include <memory>
+#include <system_error>
 
 namespace srouter::win32
 {
@@ -27,7 +29,7 @@ namespace srouter::win32
         } while (err == ERROR_BUFFER_OVERFLOW and ++tries < 4);
 
         if (err != ERROR_SUCCESS)
-            throw srouter::win32::error{err, "GetAdaptersAddresses()"};
+            throw std::system_error(static_cast<int>(err), std::system_category(), "GetAdaptersAddresses()");
 
         for (; addr; addr = addr->Next)
             visit(addr);

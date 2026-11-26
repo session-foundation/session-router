@@ -11,6 +11,7 @@
 
 #include <windows.h>
 
+#include <system_error>
 #include <thread>
 extern "C"
 {
@@ -165,7 +166,8 @@ namespace srouter::win32
 
                 m_Handle = wd::open(filter_spec.c_str(), WINDIVERT_LAYER_NETWORK, 0, 0);
                 if (auto err = GetLastError())
-                    throw win32::error{err, "cannot open windivert handle"};
+                    throw std::system_error(
+                        static_cast<int>(err), std::system_category(), "cannot open windivert handle");
             }
 
             ~IO() { wd::close(m_Handle); }
@@ -189,7 +191,10 @@ namespace srouter::win32
                     }
 
                     log::critical(logcat, "error receiving packet: {}", err);
-                    throw win32::error{err, fmt::format("failed to receive packet from windivert (code={})", err)};
+                    throw std::system_error(
+                        static_cast<int>(err),
+                        std::system_category(),
+                        fmt::format("failed to receive packet from windivert (code={})", err));
                 }
                 pkt.resize(sz);
 
@@ -213,7 +218,8 @@ namespace srouter::win32
                 wd::calc_checksum(pkt.data(), pkt.size(), addr, 0);
 
                 if (!wd::send(m_Handle, pkt.data(), pkt.size(), &sz, addr))
-                    throw win32::error{"windivert send failed"};
+                    throw std::system_error(
+                        static_cast<int>(GetLastError()), std::system_category(), "windivert send failed");
             }
 
             virtual int PollFD() const { return -1; }
