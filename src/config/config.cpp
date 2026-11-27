@@ -521,7 +521,11 @@ namespace srouter
                 "When this is enabled and an exit is used Session Router will automatically configure the",
                 "operating system routes to route public internet traffic through the exit node.",
                 "This is enabled by default, but can be disabled if advanced/manual exit routing",
-                "configuration is desired."},
+                "configuration is desired.",
+                "",
+                "Only one Session Router on a machine should have this enabled: on Linux, each one",
+                "removes the routes left by an earlier run when it starts, and can't tell another",
+                "running instance's routes from those."},
             assignment_acceptor(enable_route_poker));
 
         conf.define_option<bool>(
