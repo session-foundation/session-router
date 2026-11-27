@@ -141,7 +141,7 @@ namespace srouter
             /// protocols that are explicity allowed.  If empty, allow all.
             std::set<ProtocolInfo> protocols;
 
-            bool empty() const { return ranges.empty() and protocols.empty(); }
+            bool empty() const { return ranges.empty() and ranges_v6.empty() and protocols.empty(); }
 
             void bt_encode(oxenc::bt_dict_producer&& btdp) const;
 

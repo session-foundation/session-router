@@ -58,6 +58,8 @@ namespace srouter::rpc
             input,
             "address",
             mapexit.request.address,
+            "full_tunnel",
+            mapexit.request.full_tunnel,
             "ip_ranges",
             mapexit.request.ip_ranges,
             "token",
@@ -71,7 +73,16 @@ namespace srouter::rpc
 
     void parse_request(SwapExits& swapexits, rpc_input input)
     {
-        get_values(input, "exit_addresses", swapexits.request.exit_addresses, "token", swapexits.request.token);
+        get_values(
+            input,
+            "exit_addresses",
+            swapexits.request.exit_addresses,
+            "full_tunnel",
+            swapexits.request.full_tunnel,
+            "ip_ranges",
+            swapexits.request.ip_ranges,
+            "token",
+            swapexits.request.token);
     }
 
 #if 0

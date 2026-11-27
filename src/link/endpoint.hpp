@@ -15,6 +15,8 @@
 #include <chrono>
 #include <memory>
 #include <optional>
+#include <set>
+#include <vector>
 
 namespace srouter
 {
@@ -304,6 +306,12 @@ namespace srouter::link
         // Calls `func` for every relay connection.  If any relays have dual inbound/outbound
         // connections, this is only called for the preferred direction.
         void for_each_relay_conn(std::function<void(const RouterID&, link::Connection&)> func) const;
+
+        // Returns the addresses (port 0) of the relays we talk to directly: established outbound
+        // connections (client_conns on a client, relay_conns on a relay) plus outbound dials still
+        // in progress, each once.  IPv4-mapped IPv6 addresses are returned as plain IPv4.  Must be
+        // called from inside the loop.
+        std::vector<quic::Address> first_hop_addrs() const;
 
         void close_connection(const RouterID& rid);
 

@@ -255,9 +255,12 @@ namespace srouter
             // InboundRelaySession- or OutboundRelaySession-derived).
             const bool is_relay_session;
 
-            // TODO FIXME: make this do something.  When the session establishes we should get some
-            // capabilities metadata, such as whether it supports exit.
-            const bool is_exit_capable{false};
+            // Set when the remote ClientContact advertises a non-empty exit policy ("e").
+            bool is_exit_capable{false};
+            void set_exit_capable(bool v);
+
+            // Last packet activity time (unix ms), for ListExits.
+            sys_ms last_activity_at() const { return last_activity; }
 
             const NetworkAddress& remote() const { return _remote; }
 

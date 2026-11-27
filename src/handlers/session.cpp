@@ -1253,6 +1253,13 @@ namespace srouter::handlers
         return ret;
     }
 
+    void SessionEndpoint::set_auth_token(const NetworkAddress& remote, std::string token)
+    {
+        if (token.empty())
+            return;
+        _auth_tokens[remote] = std::move(token);
+    }
+
     std::shared_ptr<session::Session> SessionEndpoint::initiate_remote_session(
         const NetworkAddress& remote,
         std::function<void(session::Session& session)> on_attempted,

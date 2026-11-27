@@ -87,6 +87,7 @@ namespace srouter
             void invoke(QuicListener& quiclistener);
             void invoke(MapExit& mapexit);
             void invoke(ListExits& listexits);
+            void invoke(FirstHops& firsthops);
             void invoke(UnmapExit& unmapexit);
             void invoke(SwapExits& swapexits);
             // void invoke(DNSQuery& dnsquery);

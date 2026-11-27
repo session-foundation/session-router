@@ -166,6 +166,7 @@ namespace srouter::rpc
         struct request_parameters
         {
             std::string address;
+            bool full_tunnel{false};
             std::vector<std::string> ip_ranges;
             std::string token;
         } request;
@@ -181,6 +182,22 @@ namespace srouter::rpc
     struct ListExits : NoArgs
     {
         static constexpr auto name = "list_exits"sv;
+    };
+
+    //  RPC: first_hops
+    //    The IP addresses of the relays this router talks to directly: established outbound
+    //    connections and dials in progress.  Meant for something that manages routes itself (with
+    //    [network]:auto-routing=false), so it can keep these addresses on the physical uplink and
+    //    the router's own traffic never loops back into its tunnel.  The list changes as
+    //    connections come and go, so poll it.
+    //
+    //  Inputs: none
+    //
+    //  Returns: { "first_hops": ["203.0.113.7", "2001:db8::1", ...] }
+    //
+    struct FirstHops : NoArgs
+    {
+        static constexpr auto name = "first_hops"sv;
     };
 
     //  RPC: unmap_exit
@@ -216,6 +233,8 @@ namespace srouter::rpc
         struct request_parameters
         {
             std::vector<std::string> exit_addresses;
+            bool full_tunnel{false};
+            std::vector<std::string> ip_ranges;
             std::string token;
         } request;
     };
@@ -312,6 +331,7 @@ namespace srouter::rpc
         SessionClose,
         MapExit,
         ListExits,
+        FirstHops,
         SwapExits,
         UnmapExit>;
 

@@ -329,6 +329,41 @@ namespace srouter::link
         }
     }
 
+    std::vector<quic::Address> Endpoint::first_hop_addrs() const
+    {
+        assert(router.loop().inside());
+
+        std::vector<quic::Address> addrs;
+        std::set<std::string> seen;
+        auto add = [&](const link::Connection* c) {
+            if (not c or not c->conn)
+                return;
+            auto remote = c->conn->remote();
+            if (not remote.is_set() or remote.is_any_addr())
+                return;
+            if (remote.is_ipv4_mapped_ipv6())
+                remote.unmap_ipv4_from_ipv6();
+            remote.set_port(0);
+            if (seen.insert(remote.host()).second)
+                addrs.push_back(std::move(remote));
+        };
+
+        if (manager.is_stopping)
+            return addrs;
+
+        if (router.is_service_node)
+            for (const auto& [rid, relay] : relay_conns)
+                add(relay.conn);
+        else
+            for (const auto& [rid, conn] : client_conns)
+                add(conn.get());
+
+        for (const auto& [rid, conn] : pending_outbound)
+            add(conn.get());
+
+        return addrs;
+    }
+
     std::unordered_set<RouterID> Endpoint::get_current_relays(bool include_pending) const
     {
         std::unordered_set<RouterID> ret;
@@ -512,6 +547,10 @@ namespace srouter::link
         if (!pending)
         {
             log::debug(logcat, "Initiating new connection to send to {}", rid.short_string());
+            // If default is via TUN, ensure a host route to this relay exists first.
+            router.poke_first_hop(rc.addr());
+            if (rc.addr6())
+                router.poke_first_hop(*rc.addr6());
             auto conn = endpoint->connect(
                 quic::RemoteAddress{rid.to_view(), rc.addr()},
                 tls_creds,
@@ -1060,12 +1099,18 @@ namespace srouter::link
     std::pair<std::shared_ptr<quic::Connection>, std::shared_ptr<quic::BTRequestStream>> Endpoint::bootstrap_connect(
         const RelayContact& rc)
     {
+        router.poke_first_hop(rc.addr());
+        if (rc.addr6())
+            router.poke_first_hop(*rc.addr6());
         return special_connect_impl(*endpoint, rc, BOOTSTRAP_ALPN, router.config().links.congestion_control);
     }
 
     std::pair<std::shared_ptr<quic::Connection>, std::shared_ptr<quic::BTRequestStream>>
     Endpoint::testing_client_connect(const RelayContact& rc)
     {
+        router.poke_first_hop(rc.addr());
+        if (rc.addr6())
+            router.poke_first_hop(*rc.addr6());
         return special_connect_impl(*endpoint, rc, CLIENT_ALPN, router.config().links.congestion_control);
     }
 

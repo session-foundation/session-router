@@ -38,7 +38,16 @@ namespace srouter
             throw std::invalid_argument{"Cannot determine protocol name for IP Protocol: {}"_format(proto)};
         }
 
-        bool ProtocolInfo::matches_packet_proto(const IPPacket& pkt) const { return pkt.protocol() == protocol; }
+        bool ProtocolInfo::matches_packet_proto(const IPPacket& pkt) const
+        {
+            if (pkt.protocol() != protocol)
+                return false;
+            // A configured port (e.g. tcp/443) must match the destination port too.
+            if (port)
+                if (auto dp = pkt.dest_port(); not dp or *dp != *port)
+                    return false;
+            return true;
+        }
 
         bool ExitPolicy::allow_ip_traffic(const IPPacket& pkt) const
         {

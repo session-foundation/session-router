@@ -4,6 +4,7 @@
 #include "ev/fd_poller.hpp"
 #include "handlers/tun_interface.hpp"
 #include "net/ip_packet.hpp"
+#include "router/route_poker.hpp"
 #include "util/thread/threading.hpp"
 #include "vpn/packet_router.hpp"
 #include "vpn/platform.hpp"
@@ -40,12 +41,22 @@ namespace srouter::handlers
 
         std::optional<net::ExitPolicy> _exit_policy = std::nullopt;
 
+        // Owned here (full platform) — Router core cannot link RoutePoker.
+        std::shared_ptr<RoutePoker> _route_poker;
+
+        // Set when the last edge connection goes, cleared when the router is connected again.
+        bool _edges_lost{false};
+
+        void restart_exit_sessions();
+
         /// a file to load / store the ephemeral address map to
         std::optional<std::filesystem::path> _persisting_addr_file = std::nullopt;
         bool persist_addrs{false};
 
       public:
         vpn::NetworkInterface* get_vpn_interface() { return _net_if.get(); }
+
+        std::pair<bool, std::string_view> exit_route_status() const override;
 
         std::string_view name() const { return TUN; }
 
@@ -151,6 +162,15 @@ namespace srouter::handlers
         Router& router() { return _router; }
 
         void start_poller() override;
+
+        // Default route via this TUN (used by the route poker for a /0 exit mapping).
+        void add_default_route();
+        void delete_default_route();
+
+        // Look up which configured exit .sesh should carry traffic to dest IP (reserved-range).
+        std::optional<NetworkAddress> exit_for_ip(const ipv4& dest) const;
+        std::optional<NetworkAddress> exit_for_ip(const ipv6& dest) const;
+        bool remote_is_exit_broker(const NetworkAddress& remote) const;
 
       private:
         // Stores assigned IP's for each session in/out of this Session Router instance

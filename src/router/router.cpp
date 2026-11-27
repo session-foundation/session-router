@@ -438,6 +438,12 @@ namespace srouter
                 if (srv.target == "localhost.{}"_format(CLIENT_TLD) || srv.target == "localhost.loki")
                     srv.target = "{}.{}"_format(id(), CLIENT_TLD);
             }
+
+            // An exit advertises its traffic policy in its ClientContact (clients only treat a
+            // remote as an exit when it carries one) and enforces it on the TUN; both read it from
+            // the network config.
+            if (_config.exit.exit_enabled)
+                netconf.traffic_policy = _config.exit.exit_policy;
         }
     }
 
@@ -446,6 +452,10 @@ namespace srouter
         log::trace(logcat, "{} called", __PRETTY_FUNCTION__);
         if (!embedded())
             sys::service_manager->starting();
+
+        if (_config.exit.exit_enabled and _config.exit.exit_policy.ranges.empty()
+            and _config.exit.exit_policy.ranges_v6.empty())
+            throw std::runtime_error{"[exit]:enable=true requires at least one [exit]:routed-range"};
 
         if (_config.exit.exit_enabled and is_service_node)
             throw std::runtime_error{
@@ -864,7 +874,8 @@ namespace srouter
                 try_calling(logcat, callback);
 
             if (persistent || !fire_now)
-                (with_paths ? _on_path_disconnected : _on_path_connected).emplace_back(std::move(callback), persistent);
+                (with_paths ? _on_path_disconnected : _on_edge_disconnected)
+                    .emplace_back(std::move(callback), persistent);
         });
     }
 
@@ -878,6 +889,28 @@ namespace srouter
                 ++it;
             else
                 it = callbacks.erase(it);
+        }
+    }
+
+    void Router::set_first_hop_poker(std::function<void(const ipv4&)> v4, std::function<void(const ipv6&)> v6)
+    {
+        _first_hop_poke_v4 = std::move(v4);
+        _first_hop_poke_v6 = std::move(v6);
+    }
+
+    void Router::poke_first_hop(const quic::Address& addr)
+    {
+        if (addr.is_any_addr())
+            return;
+        if (addr.is_ipv4())
+        {
+            if (_first_hop_poke_v4)
+                _first_hop_poke_v4(addr.to_ipv4());
+        }
+        else if (addr.is_ipv6())
+        {
+            if (_first_hop_poke_v6)
+                _first_hop_poke_v6(addr.to_ipv6());
         }
     }
 

@@ -7,6 +7,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace srouter::handlers
@@ -36,6 +37,9 @@ namespace srouter::handlers
 
         virtual std::pair<std::optional<NetworkAddress>, bool> reverse_lookup(const ipv4& ip) = 0;
         virtual std::pair<std::optional<NetworkAddress>, bool> reverse_lookup(const ipv6& ip) = 0;
+
+        // Whether the OS exit routes are installed.  The string is a short reason when they are not.
+        virtual std::pair<bool, std::string_view> exit_route_status() const { return {false, "no vpn interface"}; }
     };
 
 }  // namespace srouter::handlers
