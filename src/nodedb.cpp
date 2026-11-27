@@ -1092,6 +1092,7 @@ namespace srouter
 
                 if (not _router.is_service_node)
                     known_rids.insert(rid);  // Only clients use this container
+                rc_disk_timestamps[rid] = rc->timestamp();
                 known_rcs.emplace(std::move(rid), std::move(*rc));
             }
             else if (ext == ZRTT_FILE_EXT)
@@ -1244,8 +1245,14 @@ namespace srouter
         if (significant_change)
             update_rc_buckets(stored, /*added=*/true);
 
-        // We inserted or updated the record, so queue saving it to disk on the disk loop
-        _router.disk_loop.call_soon([rc = stored, path = get_path_by_pubkey(stored.router_id())] { rc.write(path); });
+        auto& disk_timestamp = rc_disk_timestamps[stored.router_id()];
+        if (new_rc or significant_change or stored.router_id() == _router.id()
+            or stored.timestamp() - disk_timestamp >= RC_DISK_REFRESH_AGE)
+        {
+            disk_timestamp = stored.timestamp();
+            _router.disk_loop.call_soon(
+                [rc = stored, path = get_path_by_pubkey(stored.router_id())] { rc.write(path); });
+        }
 
         // Gossipping is a relay's job: a client stores RCs but has nobody to rebroadcast them to.
         return {true, should_gossip and _router.is_service_node};
@@ -1292,6 +1299,7 @@ namespace srouter
             {
                 removed.push_back(rid);
                 update_rc_buckets(rc, /*added=*/false);
+                rc_disk_timestamps.erase(rid);
                 it = known_rcs.erase(it);
             }
             else

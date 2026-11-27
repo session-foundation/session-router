@@ -46,6 +46,11 @@ namespace srouter
     // shortly after reconnecting so there is no much benefit in storing lots of these.
     inline constexpr size_t MAX_0RTT_TICKETS = 2;
 
+    // A mundane RC update (new timestamp and signature only) is written over the stored copy only once
+    // that copy is this old.  After a restart, peers' RC pushes (every RC_UPDATE_INTERVAL) replace the
+    // loaded copies; until then one older than OUTDATED_AGE fails local reachability testing.
+    inline constexpr auto RC_DISK_REFRESH_AGE{6h};
+
     inline const std::filesystem::path RC_FILE_EXT{".signed"};
     inline const std::filesystem::path ZRTT_FILE_EXT{".zrtt"};
 
@@ -59,6 +64,8 @@ namespace srouter
 
         std::unordered_set<RouterID> known_rids;
         std::unordered_map<RouterID, RelayContact> known_rcs;
+        // Timestamp of the RC each known_rcs entry last wrote to disk.  Main loop only, like known_rcs.
+        std::unordered_map<RouterID, std::chrono::sys_seconds> rc_disk_timestamps;
 
         std::array<std::unordered_map<RouterID, RCHash>, 128> rc_hashes;
         std::array<RCHash, 128> rc_bucket_hashes{};
