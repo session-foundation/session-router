@@ -1,5 +1,4 @@
 message(STATUS "Checking submodules")
-check_submodule(CLI11)
 check_submodule(nlohmann)
 check_submodule(oxen-libquic)
 check_submodule(mlkem-native)
@@ -29,7 +28,10 @@ if(SROUTER_HIVE)
 endif()
 
 
-sessiondep_or_submodule(CLI11 2.5.0 CLI11 CLI11::CLI11)
+if(SROUTER_DAEMON)
+  check_submodule(CLI11)
+  sessiondep_or_submodule(CLI11 2.5.0 CLI11 CLI11::CLI11)
+endif()
 
 
 if(SROUTER_PEERSTATS)
