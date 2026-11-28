@@ -1863,6 +1863,15 @@ namespace srouter::session
         return {};
     }
 
+    std::vector<path::Path::Info> OutboundSession::standby_path_info() const
+    {
+        std::vector<path::Path::Info> ret;
+        for (const auto& path : active_paths())
+            if (&path != _current_path.get())
+                ret.push_back(path.get_info());
+        return ret;
+    }
+
     path::Path::Info InboundClientSession::current_path_info() const
     {
         if (_current_path)
