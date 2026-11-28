@@ -2,9 +2,6 @@ message(STATUS "Checking submodules")
 check_submodule(CLI11)
 check_submodule(nlohmann)
 check_submodule(oxen-libquic)
-check_submodule(oxen-mq)
-check_submodule(pybind11)
-check_submodule(sqlite_orm)
 check_submodule(mlkem-native)
 
 if(NOT TARGET oxenc::oxenc)
@@ -15,6 +12,7 @@ endif()
 include(oxen-libquic/external/oxen-logging/cmake/load.cmake)
 
 if(SROUTER_FULL)
+    check_submodule(oxen-mq)
     sessiondep_or_submodule(liboxenmq 1.3 oxen-mq oxenmq::oxenmq)
 endif()
 
@@ -26,6 +24,7 @@ endif()
 
 
 if(SROUTER_HIVE)
+  check_submodule(pybind11)
   add_subdirectory(pybind11 EXCLUDE_FROM_ALL)
 endif()
 
@@ -34,6 +33,7 @@ sessiondep_or_submodule(CLI11 2.5.0 CLI11 CLI11::CLI11)
 
 
 if(SROUTER_PEERSTATS)
+  check_submodule(sqlite_orm)
   add_library(sqlite_orm INTERFACE)
   target_include_directories(sqlite_orm SYSTEM INTERFACE sqlite_orm/include)
   if(NOT TARGET sqlite3)
